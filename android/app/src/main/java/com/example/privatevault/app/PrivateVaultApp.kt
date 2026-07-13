@@ -13,9 +13,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -27,6 +29,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.privatevault.data.local.SettingsStore
+import com.example.privatevault.data.local.ThemePreference
 import com.example.privatevault.R
 import com.example.privatevault.attachment.AttachmentManager
 import com.example.privatevault.data.repository.ChatRepository
@@ -63,11 +66,14 @@ fun PrivateVaultApp(
     onAttachFile: suspend (Uri) -> Result<ChatAttachment>,
     onBackupNow: suspend () -> Result<String>,
     onResetDebugKey: (String) -> Result<Unit>,
+    themePreference: ThemePreference,
+    onThemePreferenceChanged: (ThemePreference) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val attachmentFailedMessage = stringResource(R.string.attachment_failed)
     val scope = rememberCoroutineScope()
+    var pendingAttachment by remember { mutableStateOf<ChatAttachment?>(null) }
     val onboardingComplete by settingsStore.onboardingComplete.collectAsState(initial = false)
     var destination by rememberSaveable { mutableStateOf(MainDestination.Chat) }
     var onboardingPage by rememberSaveable { mutableStateOf(OnboardingPage.Permission) }
@@ -98,7 +104,7 @@ fun PrivateVaultApp(
         if (uri != null) {
             scope.launch {
                 onAttachFile(uri)
-                    .onSuccess(chatRepository::sendAttachment)
+                    .onSuccess { pendingAttachment = it }
                     .onFailure { error ->
                         Toast.makeText(
                             context,
@@ -152,6 +158,12 @@ fun PrivateVaultApp(
                 onRetryRegistration = onRetryRegistration,
                 onOpenSettings = { destination = MainDestination.Settings },
                 onAttachFile = { attachmentLauncher.launch(arrayOf("*/*")) },
+                pendingAttachment = pendingAttachment,
+                onRemovePendingAttachment = { pendingAttachment = null },
+                onSendAttachment = { attachment, caption ->
+                    chatViewModel.sendAttachment(attachment, caption)
+                    pendingAttachment = null
+                },
                 attachmentManager = attachmentManager,
                 modifier = modifier
             )
@@ -168,6 +180,8 @@ fun PrivateVaultApp(
                 },
                 onBackupNow = onBackupNow,
                 onResetDebugKey = onResetDebugKey,
+                themePreference = themePreference,
+                onThemePreferenceChanged = onThemePreferenceChanged,
                 modifier = modifier
             )
             MainDestination.Pairing -> PairingScreen(

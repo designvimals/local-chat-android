@@ -3,6 +3,7 @@ package com.example.privatevault.data.local
 import android.content.Context
 import com.example.privatevault.model.ChatAttachment
 import com.example.privatevault.model.Message
+import com.example.privatevault.model.MessageEmphasis
 import com.example.privatevault.util.TimeUtils
 import java.io.File
 import java.util.UUID
@@ -25,7 +26,11 @@ class MessageStore(
     val messages: StateFlow<List<Message>> = _messages
 
     @Synchronized
-    fun addLocalMessage(text: String, attachment: ChatAttachment? = null): Message {
+    fun addLocalMessage(
+        text: String,
+        attachment: ChatAttachment? = null,
+        emphasisLevel: Int = MessageEmphasis.Normal.storedValue
+    ): Message {
         val message = Message(
             id = "msg_${UUID.randomUUID()}",
             senderDeviceId = tokenStore.getDeviceId(),
@@ -33,7 +38,8 @@ class MessageStore(
             text = text,
             timestamp = TimeUtils.nowIso(),
             status = "sent",
-            attachment = attachment
+            attachment = attachment,
+            emphasisLevel = MessageEmphasis.sanitize(emphasisLevel)
         )
         replace(_messages.value + message)
         return message
@@ -52,7 +58,8 @@ class MessageStore(
             timestamp = incoming.timestamp,
             status = "delivered",
             deliveredAt = now,
-            attachment = incoming.attachment
+            attachment = incoming.attachment,
+            emphasisLevel = MessageEmphasis.sanitize(incoming.emphasisLevel)
         )
         replace(_messages.value + message)
         return message
@@ -101,9 +108,33 @@ class MessageStore(
     }
 
     @Synchronized
+    fun toggleReaction(messageId: String, emoji: String) {
+        val deviceId = tokenStore.getDeviceId()
+        replaceIfChanged { message ->
+            if (message.id != messageId) return@replaceIfChanged message
+            val current = message.reactions.firstOrNull { it.emoji == emoji }
+            val reactors = current?.reactorDeviceIds.orEmpty().toMutableSet().apply {
+                if (!add(deviceId)) remove(deviceId)
+            }
+            val next = message.reactions
+                .filterNot { it.emoji == emoji }
+                .toMutableList()
+                .apply {
+                    if (reactors.isNotEmpty()) {
+                        add(com.example.privatevault.model.MessageReaction(emoji, reactors))
+                    }
+                }
+            message.copy(reactions = next)
+        }
+    }
+
+    @Synchronized
     fun merge(incoming: List<Message>) {
         val merged = _messages.value.associateBy { it.id }.toMutableMap()
-        incoming.forEach { candidate ->
+        incoming.forEach { rawCandidate ->
+            val candidate = rawCandidate.copy(
+                emphasisLevel = MessageEmphasis.sanitize(rawCandidate.emphasisLevel)
+            )
             val current = merged[candidate.id]
             merged[candidate.id] = if (current == null || statusRank(candidate.status) >= statusRank(current.status)) {
                 candidate
@@ -151,7 +182,9 @@ class MessageStore(
         if (!transcriptFile.exists()) return emptyList()
         return transcriptFile.useLines { lines ->
             lines.mapNotNull { line ->
-                runCatching { json.decodeFromString<Message>(line) }.getOrNull()
+                runCatching { json.decodeFromString<Message>(line) }.getOrNull()?.let { message ->
+                    message.copy(emphasisLevel = MessageEmphasis.sanitize(message.emphasisLevel))
+                }
             }.sortedBy(Message::timestamp).toList()
         }
     }

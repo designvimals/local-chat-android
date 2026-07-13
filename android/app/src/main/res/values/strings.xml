@@ -109,4 +109,27 @@
     <string name="reset_debug_key_body">Create and confirm a new four-digit debug key.</string>
     <string name="debug_key_updated">Debug key updated.</string>
     <string name="cancel">Cancel</string>
+    <string name="open_emoji_picker">Open emoji picker</string>
+    <string name="close_emoji_picker">Close emoji picker</string>
+    <string name="insert_emoji">Insert emoji %1$s</string>
+    <string name="link_preview_accessibility">Link preview for %1$s: %2$s</string>
+    <string name="open_link">Open link</string>
+    <string name="switch_to_light_theme">Switch to light theme</string>
+    <string name="switch_to_dark_theme">Switch to dark theme</string>
+    <string name="appearance">Appearance</string>
+    <string name="theme_system">Follow system</string>
+    <string name="theme_light">Light</string>
+    <string name="theme_dark">Dark</string>
+    <string name="send_message_hint">Send message. Touch and hold to adjust message emphasis.</string>
+    <string name="message_emphasis_preview">Message emphasis preview</string>
+    <string name="emphasis_normal">Normal size</string>
+    <string name="emphasis_low">Low emphasis</string>
+    <string name="emphasis_medium">Medium emphasis</string>
+    <string name="emphasis_high">High emphasis</string>
+    <string name="emphasis_maximum">Maximum emphasis</string>
+    <string name="send_cancelled">Send cancelled</string>
+    <string name="drag_left_to_reduce">Drag left to reduce · move up to cancel</string>
+    <string name="open_source_licenses">Open-source licenses</string>
+    <string name="google_sans_flex_license_title">Google Sans Flex license</string>
+    <string name="close">Close</string>
 </resources>
