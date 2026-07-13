@@ -12,11 +12,25 @@ android {
         applicationId = "com.example.privatevault"
         minSdk = 26
         targetSdk = 37
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.2.1"
 
-        val backendUrl = providers.gradleProperty("pocBackendUrl").getOrElse("http://10.0.2.2:8787")
-        val registrationKey = providers.gradleProperty("pocRegistrationKey").getOrElse("local-dev-registration-key-change-me")
+        val releaseRequested = gradle.startParameter.taskNames.any { task ->
+            task.contains("Release", ignoreCase = true)
+        }
+        val configuredBackendUrl = providers.gradleProperty("pocBackendUrl").orNull
+        val configuredRegistrationKey = providers.gradleProperty("pocRegistrationKey").orNull
+        if (releaseRequested) {
+            if (configuredBackendUrl.isNullOrBlank() || !configuredBackendUrl.startsWith("https://")) {
+                throw GradleException("Release builds require -PpocBackendUrl with a public HTTPS relay URL.")
+            }
+            if (configuredRegistrationKey.isNullOrBlank() || configuredRegistrationKey == "local-dev-registration-key-change-me") {
+                throw GradleException("Release builds require -PpocRegistrationKey matching the relay.")
+            }
+        }
+
+        val backendUrl = configuredBackendUrl ?: "http://10.0.2.2:8787"
+        val registrationKey = configuredRegistrationKey ?: "local-dev-registration-key-change-me"
 
         buildConfigField("String", "BACKEND_URL", "\"$backendUrl\"")
         buildConfigField("String", "REGISTRATION_KEY", "\"$registrationKey\"")

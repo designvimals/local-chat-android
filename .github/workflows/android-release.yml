@@ -47,6 +47,8 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ORG_GRADLE_PROJECT_pocBackendUrl: ${{ secrets.ANDROID_BACKEND_URL }}
+          ORG_GRADLE_PROJECT_pocRegistrationKey: ${{ secrets.DEVICE_REGISTRATION_KEY }}
         run: |
           chmod +x gradlew
           ./gradlew :app:assembleRelease
