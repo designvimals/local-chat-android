@@ -92,6 +92,14 @@ export class RelayClient {
   }
 
   download(path: string): Promise<{ blob: Blob; name: string }> {
+    return this.startDownload("storage.download", { path });
+  }
+
+  downloadAttachment(attachmentId: string): Promise<{ blob: Blob; name: string }> {
+    return this.startDownload("chat.attachment.download", { attachmentId });
+  }
+
+  private startDownload(type: string, payload: Record<string, unknown>): Promise<{ blob: Blob; name: string }> {
     if (!this.registered || !this.status.deviceOnline || this.socket?.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("The phone is offline."));
     }
@@ -110,9 +118,9 @@ export class RelayClient {
         timeout
       });
       this.socket?.send(JSON.stringify({
-        type: "storage.download",
+        type,
         requestId,
-        payload: { path }
+        payload
       }));
     });
   }

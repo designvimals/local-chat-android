@@ -1,6 +1,7 @@
 package com.example.privatevault.data.local
 
 import android.content.Context
+import com.example.privatevault.model.ChatAttachment
 import com.example.privatevault.model.Message
 import com.example.privatevault.util.TimeUtils
 import java.io.File
@@ -24,32 +25,34 @@ class MessageStore(
     val messages: StateFlow<List<Message>> = _messages
 
     @Synchronized
-    fun addLocalMessage(text: String): Message {
+    fun addLocalMessage(text: String, attachment: ChatAttachment? = null): Message {
         val message = Message(
             id = "msg_${UUID.randomUUID()}",
             senderDeviceId = tokenStore.getDeviceId(),
             receiverDeviceId = CONVERSATION_PEER_ID,
             text = text,
             timestamp = TimeUtils.nowIso(),
-            status = "sent"
+            status = "sent",
+            attachment = attachment
         )
         replace(_messages.value + message)
         return message
     }
 
     @Synchronized
-    fun receiveMessage(id: String, senderDeviceId: String, text: String, timestamp: String): Message {
-        _messages.value.firstOrNull { it.id == id }?.let { return it }
+    fun receiveMessage(incoming: Message): Message {
+        _messages.value.firstOrNull { it.id == incoming.id }?.let { return it }
 
         val now = TimeUtils.nowIso()
         val message = Message(
-            id = id,
-            senderDeviceId = senderDeviceId,
+            id = incoming.id,
+            senderDeviceId = incoming.senderDeviceId,
             receiverDeviceId = tokenStore.getDeviceId(),
-            text = text,
-            timestamp = timestamp,
+            text = incoming.text,
+            timestamp = incoming.timestamp,
             status = "delivered",
-            deliveredAt = now
+            deliveredAt = now,
+            attachment = incoming.attachment
         )
         replace(_messages.value + message)
         return message
@@ -108,7 +111,8 @@ class MessageStore(
                 current
             }
         }
-        replace(merged.values.toList())
+        val next = merged.values.sortedBy(Message::timestamp)
+        if (next != _messages.value) replace(next)
     }
 
     @Synchronized

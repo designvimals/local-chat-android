@@ -1,5 +1,6 @@
 package com.example.privatevault.ui.screen.settings
 
+import android.os.SystemClock
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,17 +20,24 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.privatevault.R
+import com.example.privatevault.ui.lock.DebugKeySetupDialog
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -38,12 +46,18 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onOpenPairing: () -> Unit,
     onBackupNow: suspend () -> Result<String>,
+    onResetDebugKey: (String) -> Result<Unit>,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     var backupStatus by remember { mutableStateOf<String?>(null) }
     var backingUp by remember { mutableStateOf(false) }
+    var debugKeyTapCount by remember { mutableIntStateOf(0) }
+    var debugKeyTapWindowStartedAt by remember { mutableLongStateOf(0L) }
+    var showDebugKeyReset by remember { mutableStateOf(false) }
+    var debugKeyStatus by remember { mutableStateOf<String?>(null) }
+    val debugKeyAccessibility = stringResource(R.string.debug_key_accessibility)
     Scaffold(
         modifier = modifier,
         topBar = {
@@ -85,6 +99,52 @@ fun SettingsScreen(
                     }
                 }
             }
+            Card(
+                onClick = {
+                    val now = SystemClock.elapsedRealtime()
+                    if (now - debugKeyTapWindowStartedAt > DEBUG_KEY_TAP_WINDOW_MILLIS) {
+                        debugKeyTapWindowStartedAt = now
+                        debugKeyTapCount = 1
+                    } else {
+                        debugKeyTapCount += 1
+                    }
+                    if (debugKeyTapCount >= DEBUG_KEY_RESET_TAPS) {
+                        debugKeyTapCount = 0
+                        debugKeyTapWindowStartedAt = 0L
+                        debugKeyStatus = null
+                        showDebugKeyReset = true
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = debugKeyAccessibility
+                    }
+            ) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        stringResource(R.string.debug_key),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        stringResource(R.string.debug_key_mask),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    debugKeyStatus?.let { status ->
+                        Text(
+                            status,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                        )
+                    }
+                }
+            }
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(18.dp),
@@ -111,8 +171,8 @@ fun SettingsScreen(
                             scope.launch {
                                 backingUp = true
                                 backupStatus = onBackupNow().fold(
-                                    onSuccess = { path -> context.getString(R.string.backup_created, path) },
-                                    onFailure = { error -> error.message ?: context.getString(R.string.backup_failed) }
+                                    onSuccess = { path -> resources.getString(R.string.backup_created, path) },
+                                    onFailure = { error -> error.message ?: resources.getString(R.string.backup_failed) }
                                 )
                                 backingUp = false
                             }
@@ -127,4 +187,22 @@ fun SettingsScreen(
             }
         }
     }
+
+    if (showDebugKeyReset) {
+        val updatedMessage = stringResource(R.string.debug_key_updated)
+        DebugKeySetupDialog(
+            title = stringResource(R.string.reset_debug_key),
+            body = stringResource(R.string.reset_debug_key_body),
+            confirmLabel = stringResource(R.string.reset_debug_key),
+            onConfirm = onResetDebugKey,
+            onDismiss = { showDebugKeyReset = false },
+            onSaved = {
+                showDebugKeyReset = false
+                debugKeyStatus = updatedMessage
+            }
+        )
+    }
 }
+
+private const val DEBUG_KEY_RESET_TAPS = 7
+private const val DEBUG_KEY_TAP_WINDOW_MILLIS = 3_000L

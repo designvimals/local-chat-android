@@ -23,6 +23,11 @@ const viewerCommandSchema = z.object({
     "chat.sync",
     "chat.send",
     "chat.read",
+    "chat.typing",
+    "chat.attachment.upload.start",
+    "chat.attachment.upload.chunk",
+    "chat.attachment.upload.complete",
+    "chat.attachment.download",
     "storage.list",
     "storage.download",
     "device.status.get"

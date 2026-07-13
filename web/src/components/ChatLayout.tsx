@@ -26,6 +26,8 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
   const [lastSeen, setLastSeen] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [remoteTyping, setRemoteTyping] = useState(false);
+  const typingStateRef = useRef(false);
 
   const commitMessages = useCallback((next: Message[]) => {
     const sorted = [...next].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
@@ -41,9 +43,10 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
     }
     syncingRef.current = true;
     try {
-      let remote = await relay.request<{ messages: Message[] }>("chat.sync", {
+      let remote = await relay.request<{ messages: Message[]; typing?: boolean }>("chat.sync", {
         readerDeviceId: session.viewerDeviceId
       });
+      setRemoteTyping(remote.typing === true);
       let merged = mergeMessages(messagesRef.current, remote.messages);
       commitMessages(merged);
 
@@ -69,9 +72,10 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
           readAt: new Date().toISOString()
         });
       }
-      remote = await relay.request<{ messages: Message[] }>("chat.sync", {
+      remote = await relay.request<{ messages: Message[]; typing?: boolean }>("chat.sync", {
         readerDeviceId: session.viewerDeviceId
       });
+      setRemoteTyping(remote.typing === true);
       commitMessages(mergeMessages(messagesRef.current, remote.messages));
       setError(null);
       setLastSeen(new Date().toISOString());
@@ -133,6 +137,14 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
     commitMessages([...messagesRef.current, message]);
     void sync();
   }
+
+  const handleTyping = useCallback((typing: boolean) => {
+    if (typingStateRef.current === typing) return;
+    typingStateRef.current = typing;
+    if (relay.isDeviceOnline()) {
+      void relay.request("chat.typing", { typing }).catch(() => undefined);
+    }
+  }, [relay]);
 
   function signOut() {
     relay.close();
@@ -197,12 +209,19 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
         <div className="chat-body">
           {error ? <div className="connection-banner" role="status">{error}</div> : null}
           {loading && messages.length === 0 ? <div className="empty-state" role="status">Opening your local conversation…</div> : null}
-          {!loading || messages.length > 0 ? <MessageList messages={messages} viewerDeviceId={session.viewerDeviceId} /> : null}
+          {!loading || messages.length > 0 ? (
+            <MessageList
+              messages={messages}
+              viewerDeviceId={session.viewerDeviceId}
+              relay={relay}
+              remoteTyping={remoteTyping}
+            />
+          ) : null}
         </div>
 
         <div className="composer-shell">
           {!online ? <p className="queue-hint">Offline — send now and it will leave when the phone reconnects.</p> : null}
-          <MessageInput onOpenStorage={() => navigate("/storage")} onSend={handleSend} />
+          <MessageInput onOpenStorage={() => navigate("/storage")} onSend={handleSend} onTyping={handleTyping} />
         </div>
       </main>
 

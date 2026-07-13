@@ -17,7 +17,7 @@ class ChatBackupManager(private val context: Context) {
         val stamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmmss"))
         val destination = File(directory, "chat-backup-$reason-$stamp.txt")
         destination.bufferedWriter().use { writer ->
-            messages.forEach { message ->
+            messages.filter { it.text.isNotBlank() }.forEach { message ->
                 val speaker = if (message.senderDeviceId == tokenStore.getDeviceId()) "Me" else "Other device"
                 val text = message.text.replace("\r", " ").replace("\n", " ")
                 writer.appendLine("[${message.timestamp}] $speaker: $text")

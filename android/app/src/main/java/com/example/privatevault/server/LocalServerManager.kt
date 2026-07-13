@@ -3,7 +3,6 @@ package com.example.privatevault.server
 import com.example.privatevault.data.local.SettingsStore
 import com.example.privatevault.data.repository.ChatRepository
 import com.example.privatevault.data.repository.DeviceRepository
-import com.example.privatevault.service.StorageSessionNotifier
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.serialization.kotlinx.json.json
@@ -22,8 +21,7 @@ class LocalServerManager(
     private val settingsStore: SettingsStore,
     private val chatRepository: ChatRepository,
     private val pathResolver: PathResolver,
-    private val deviceRepository: DeviceRepository,
-    private val notifier: StorageSessionNotifier
+    private val deviceRepository: DeviceRepository
 ) {
     private var server: EmbeddedServer<CIOApplicationEngine, CIOApplicationEngine.Configuration>? = null
 
@@ -58,6 +56,5 @@ class LocalServerManager(
     fun stop() {
         server?.stop(1000, 3000)
         server = null
-        notifier.markInactive()
     }
 }

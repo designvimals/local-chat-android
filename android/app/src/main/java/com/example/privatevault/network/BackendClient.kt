@@ -1,12 +1,14 @@
 package com.example.privatevault.network
 
 import android.util.Base64
+import com.example.privatevault.attachment.AttachmentManager
 import com.example.privatevault.BuildConfig
 import com.example.privatevault.data.local.SettingsStore
 import com.example.privatevault.data.local.TokenStore
 import com.example.privatevault.data.repository.ChatRepository
 import com.example.privatevault.data.repository.DeviceRepository
 import com.example.privatevault.model.Message
+import com.example.privatevault.model.ChatAttachment
 import com.example.privatevault.server.PathResolver
 import com.example.privatevault.util.FileUtils
 import io.ktor.client.HttpClient
@@ -20,6 +22,7 @@ import io.ktor.websocket.close
 import io.ktor.websocket.readText
 import io.ktor.websocket.send
 import java.io.File
+import java.io.InputStream
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -50,6 +53,7 @@ class BackendClient(
     private val chatRepository: ChatRepository,
     private val pathResolver: PathResolver,
     private val settingsStore: SettingsStore,
+    private val attachmentManager: AttachmentManager,
     private val baseUrl: String = BuildConfig.BACKEND_URL
 ) {
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -119,18 +123,37 @@ class BackendClient(
                     ?: com.example.privatevault.data.local.MessageStore.VIEWER_DEVICE_ID
                 buildJsonObject {
                     put("messages", json.encodeToJsonElement(chatRepository.messagesForViewer(readerDeviceId)))
+                    put("typing", chatRepository.isLocalTyping())
                 }
             }
             "chat.send" -> respond(session, message) {
                 val incoming = json.decodeFromJsonElement<Message>(message.payload().getValue("message"))
-                val saved = chatRepository.receiveMessage(
-                    incoming.id,
-                    incoming.senderDeviceId,
-                    incoming.text,
-                    incoming.timestamp
-                )
+                val saved = chatRepository.receiveMessage(incoming)
                 buildJsonObject { put("message", json.encodeToJsonElement(saved)) }
             }
+            "chat.typing" -> respond(session, message) {
+                chatRepository.setRemoteTyping(message.payload().string("typing") == "true")
+                buildJsonObject { put("ok", true) }
+            }
+            "chat.attachment.upload.start" -> respond(session, message) {
+                val attachment = json.decodeFromJsonElement<ChatAttachment>(message.payload().getValue("attachment"))
+                attachmentManager.beginIncoming(attachment)
+                buildJsonObject { put("ok", true) }
+            }
+            "chat.attachment.upload.chunk" -> respond(session, message) {
+                val payload = message.payload()
+                attachmentManager.appendIncomingChunk(
+                    payload.string("attachmentId"),
+                    Base64.decode(payload.string("data"), Base64.DEFAULT)
+                )
+                buildJsonObject { put("ok", true) }
+            }
+            "chat.attachment.upload.complete" -> respond(session, message) {
+                val attachment = json.decodeFromJsonElement<ChatAttachment>(message.payload().getValue("attachment"))
+                attachmentManager.finishIncoming(attachment)
+                buildJsonObject { put("ok", true) }
+            }
+            "chat.attachment.download" -> streamAttachment(session, message)
             "chat.read" -> respond(session, message) {
                 val payload = message.payload()
                 chatRepository.markReadBy(
@@ -172,7 +195,7 @@ class BackendClient(
                     put("size", file.length())
                 }
             )
-            streamFileChunks(session, requestId, file)
+            file.inputStream().buffered().use { input -> streamInputChunks(session, requestId, input) }
             session.sendJson(
                 buildJsonObject {
                     put("type", "download.complete")
@@ -185,8 +208,33 @@ class BackendClient(
         }
     }
 
-    private suspend fun streamFileChunks(session: DefaultClientWebSocketSession, requestId: String, file: File) {
-        file.inputStream().buffered().use { input ->
+    private suspend fun streamAttachment(session: DefaultClientWebSocketSession, command: JsonObject) {
+        val requestId = command.string("requestId")
+        try {
+            val attachmentId = command.payload().string("attachmentId")
+            val attachment = requireNotNull(chatRepository.attachment(attachmentId)) { "Attachment metadata is unavailable." }
+            session.sendJson(
+                buildJsonObject {
+                    put("type", "download.start")
+                    put("requestId", requestId)
+                    put("name", attachment.name)
+                    put("mimeType", attachment.mimeType)
+                    put("size", attachment.size)
+                    put("attachmentId", attachment.id)
+                }
+            )
+            attachmentManager.open(attachment.id).buffered().use { input -> streamInputChunks(session, requestId, input) }
+            session.sendJson(buildJsonObject {
+                put("type", "download.complete")
+                put("requestId", requestId)
+            })
+        } catch (error: Throwable) {
+            if (error is CancellationException) throw error
+            sendError(session, requestId, error.message ?: "Attachment transfer failed on the phone.")
+        }
+    }
+
+    private suspend fun streamInputChunks(session: DefaultClientWebSocketSession, requestId: String, input: InputStream) {
             val buffer = ByteArray(48 * 1024)
             var chunksSent = 0
             while (true) {
@@ -203,7 +251,6 @@ class BackendClient(
                 chunksSent += 1
                 if (chunksSent % 8 == 0) yield()
             }
-        }
     }
 
     private suspend fun respond(
