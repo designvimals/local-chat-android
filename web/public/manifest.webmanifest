@@ -1,0 +1,20 @@
+{
+  "id": "/",
+  "name": "Between Private Chat",
+  "short_name": "Between",
+  "description": "Private two-person chat and direct phone file access.",
+  "start_url": "/login",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#edece6",
+  "theme_color": "#164f46",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

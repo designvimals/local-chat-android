@@ -1,0 +1,21 @@
+{
+  "name": "@private-chat-storage/api-contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "types.ts",
+  "types": "types.ts",
+  "exports": {
+    ".": {
+      "types": "./types.ts",
+      "default": "./types.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "check": "tsc --noEmit --project tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

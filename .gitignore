@@ -1,0 +1,16 @@
+node_modules/
+dist/
+build/
+.gradle/
+.idea/
+*.iml
+local.properties
+.DS_Store
+*.apk
+*.aab
+web/.vite/
+backend/.env
+.playwright-cli/
+.agents/
+skills-lock.json
+output/
