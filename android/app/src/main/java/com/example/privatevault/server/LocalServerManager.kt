@@ -49,7 +49,7 @@ class LocalServerManager(
             routing {
                 healthRoutes(settingsStore, deviceRepository, pairedToken)
                 chatRoutes(chatRepository, pairedToken)
-                storageRoutes(pathResolver, settingsStore, notifier, pairedToken)
+                storageRoutes(pathResolver, settingsStore, pairedToken)
             }
         }.start(wait = false)
     }

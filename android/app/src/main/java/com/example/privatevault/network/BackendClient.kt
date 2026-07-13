@@ -8,7 +8,6 @@ import com.example.privatevault.data.repository.ChatRepository
 import com.example.privatevault.data.repository.DeviceRepository
 import com.example.privatevault.model.Message
 import com.example.privatevault.server.PathResolver
-import com.example.privatevault.service.StorageSessionNotifier
 import com.example.privatevault.util.FileUtils
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
@@ -50,7 +49,6 @@ class BackendClient(
     private val chatRepository: ChatRepository,
     private val pathResolver: PathResolver,
     private val settingsStore: SettingsStore,
-    private val notifier: StorageSessionNotifier,
     private val baseUrl: String = BuildConfig.BACKEND_URL
 ) {
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -147,7 +145,6 @@ class BackendClient(
             }
             "storage.list" -> respond(session, message) {
                 require(storageAllowed()) { "File sharing is paused on the phone." }
-                notifier.markActive()
                 val path = message.payload().string("path")
                 buildJsonObject {
                     put("path", path)
@@ -162,7 +159,6 @@ class BackendClient(
         val requestId = command.string("requestId")
         try {
             require(storageAllowed()) { "File sharing is paused on the phone." }
-            notifier.markActive()
             val file = pathResolver.resolveFile(command.payload().string("path"))
             session.sendJson(
                 buildJsonObject {

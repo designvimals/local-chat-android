@@ -2,7 +2,6 @@ package com.example.privatevault.server
 
 import com.example.privatevault.data.local.SettingsStore
 import com.example.privatevault.model.FileItem
-import com.example.privatevault.service.StorageSessionNotifier
 import com.example.privatevault.util.FileUtils
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.Serializable
@@ -19,7 +18,6 @@ import io.ktor.server.routing.route
 fun Route.storageRoutes(
     pathResolver: PathResolver,
     settingsStore: SettingsStore,
-    notifier: StorageSessionNotifier,
     pairedToken: String
 ) {
     route("/storage") {
@@ -30,7 +28,6 @@ fun Route.storageRoutes(
                 return@get
             }
 
-            notifier.markActive()
             val path = call.request.queryParameters["path"] ?: "/"
             val items = runCatching { pathResolver.list(path) }
                 .getOrElse {
@@ -47,7 +44,6 @@ fun Route.storageRoutes(
                 return@get
             }
 
-            notifier.markActive()
             val path = call.request.queryParameters["path"]
             if (path.isNullOrBlank()) {
                 call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Choose a file to download."))

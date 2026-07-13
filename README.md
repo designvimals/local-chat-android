@@ -64,6 +64,12 @@ The code is accepted only while the phone is connected and advertising it. It is
 
 With no server-side message storage, closing the browser leaves its unsent queue in that browser until it is opened again. Phone-originated messages remain in the phone's local transcript and are copied when the paired browser reconnects.
 
+## Android updates
+
+The Android app checks the repository's latest public GitHub Release whenever it comes to the foreground. If the release tag is newer than the installed `versionName` and the release contains an APK, the app offers to download it. The download opens in the phone's browser; Android still asks the user to approve the sideloaded installation.
+
+Push a tag matching the version in `android/app/build.gradle.kts` (for example, `v0.2.2`) to run `.github/workflows/android-release.yml`. The workflow builds a signed APK and attaches it to a GitHub Release. GitHub Actions must have `ANDROID_BACKEND_URL` and `DEVICE_REGISTRATION_KEY` for the production relay, plus `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD` for signing. Release builds fail if the public HTTPS relay URL or registration key is missing. Keep the signing key unchanged: Android rejects updates signed with a different key, and uninstalling to switch keys erases the app's local messages.
+
 ## Shared storage boundary
 
 The one-time Android all-files permission is requested through the system settings screen. The remote interface exposes only readable shared content:

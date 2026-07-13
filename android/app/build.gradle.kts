@@ -12,11 +12,25 @@ android {
         applicationId = "com.example.privatevault"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 4
+        versionName = "0.2.2"
 
-        val backendUrl = providers.gradleProperty("pocBackendUrl").getOrElse("http://10.0.2.2:8787")
-        val registrationKey = providers.gradleProperty("pocRegistrationKey").getOrElse("local-dev-registration-key-change-me")
+        val releaseRequested = gradle.startParameter.taskNames.any { task ->
+            task.contains("Release", ignoreCase = true)
+        }
+        val configuredBackendUrl = providers.gradleProperty("pocBackendUrl").orNull
+        val configuredRegistrationKey = providers.gradleProperty("pocRegistrationKey").orNull
+        if (releaseRequested) {
+            if (configuredBackendUrl.isNullOrBlank() || !configuredBackendUrl.startsWith("https://")) {
+                throw GradleException("Release builds require -PpocBackendUrl with a public HTTPS relay URL.")
+            }
+            if (configuredRegistrationKey.isNullOrBlank() || configuredRegistrationKey == "local-dev-registration-key-change-me") {
+                throw GradleException("Release builds require -PpocRegistrationKey matching the relay.")
+            }
+        }
+
+        val backendUrl = configuredBackendUrl ?: "http://10.0.2.2:8787"
+        val registrationKey = configuredRegistrationKey ?: "local-dev-registration-key-change-me"
 
         buildConfigField("String", "BACKEND_URL", "\"$backendUrl\"")
         buildConfigField("String", "REGISTRATION_KEY", "\"$registrationKey\"")
@@ -25,6 +39,19 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    val releaseKeystorePath = providers.environmentVariable("ANDROID_KEYSTORE_PATH").orNull
+    if (!releaseKeystorePath.isNullOrBlank()) {
+        signingConfigs.create("githubRelease") {
+            storeFile = file(releaseKeystorePath)
+            storePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").get()
+            keyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").get()
+            keyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD").get()
+        }
+        buildTypes.getByName("release") {
+            signingConfig = signingConfigs.getByName("githubRelease")
+        }
     }
 
     compileOptions {
