@@ -23,6 +23,14 @@ export interface Message {
   status: MessageStatus;
   deliveredAt?: string | null;
   readAt?: string | null;
+  attachment?: ChatAttachment | null;
+}
+
+export interface ChatAttachment {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
 }
 
 export interface FileItem {

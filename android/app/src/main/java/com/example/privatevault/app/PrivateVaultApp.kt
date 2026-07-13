@@ -28,10 +28,12 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.privatevault.data.local.SettingsStore
 import com.example.privatevault.R
+import com.example.privatevault.attachment.AttachmentManager
 import com.example.privatevault.data.repository.ChatRepository
 import com.example.privatevault.data.repository.StorageRepository
 import com.example.privatevault.network.BackendRegistrationState
 import com.example.privatevault.network.AppUpdate
+import com.example.privatevault.model.ChatAttachment
 import com.example.privatevault.ui.screen.chat.ChatScreen
 import com.example.privatevault.ui.screen.chat.ChatViewModel
 import com.example.privatevault.ui.screen.onboarding.OnboardingScreen
@@ -57,11 +59,14 @@ fun PrivateVaultApp(
     availableUpdate: StateFlow<AppUpdate?>,
     onDismissUpdate: (AppUpdate) -> Unit,
     onDownloadUpdate: (AppUpdate) -> Unit,
-    onAttachFile: suspend (Uri) -> Result<String>,
+    attachmentManager: AttachmentManager,
+    onAttachFile: suspend (Uri) -> Result<ChatAttachment>,
     onBackupNow: suspend () -> Result<String>,
+    onResetDebugKey: (String) -> Result<Unit>,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val attachmentFailedMessage = stringResource(R.string.attachment_failed)
     val scope = rememberCoroutineScope()
     val onboardingComplete by settingsStore.onboardingComplete.collectAsState(initial = false)
     var destination by rememberSaveable { mutableStateOf(MainDestination.Chat) }
@@ -93,11 +98,11 @@ fun PrivateVaultApp(
         if (uri != null) {
             scope.launch {
                 onAttachFile(uri)
-                    .onSuccess { fileName -> chatRepository.sendMessage(context.getString(R.string.attachment_message, fileName)) }
+                    .onSuccess(chatRepository::sendAttachment)
                     .onFailure { error ->
                         Toast.makeText(
                             context,
-                            error.message ?: context.getString(R.string.attachment_failed),
+                            error.message ?: attachmentFailedMessage,
                             Toast.LENGTH_LONG
                         ).show()
                     }
@@ -147,6 +152,7 @@ fun PrivateVaultApp(
                 onRetryRegistration = onRetryRegistration,
                 onOpenSettings = { destination = MainDestination.Settings },
                 onAttachFile = { attachmentLauncher.launch(arrayOf("*/*")) },
+                attachmentManager = attachmentManager,
                 modifier = modifier
             )
             MainDestination.Storage -> StorageBrowserScreen(
@@ -161,6 +167,7 @@ fun PrivateVaultApp(
                     destination = MainDestination.Pairing
                 },
                 onBackupNow = onBackupNow,
+                onResetDebugKey = onResetDebugKey,
                 modifier = modifier
             )
             MainDestination.Pairing -> PairingScreen(

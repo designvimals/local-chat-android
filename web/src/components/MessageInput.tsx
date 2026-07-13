@@ -1,16 +1,23 @@
 import { FolderOpen, Send } from "lucide-react";
-import { FormEvent, KeyboardEvent, useState } from "react";
+import { ChangeEvent, FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 
 interface MessageInputProps {
   disabled?: boolean;
   onOpenStorage: () => void;
   onSend: (text: string) => Promise<void>;
+  onTyping?: (typing: boolean) => void;
 }
 
-export function MessageInput({ disabled = false, onOpenStorage, onSend }: MessageInputProps) {
+export function MessageInput({ disabled = false, onOpenStorage, onSend, onTyping }: MessageInputProps) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const trimmed = text.trim();
+  const typingTimer = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
+    onTyping?.(false);
+  }, [onTyping]);
 
   async function submit(event?: FormEvent) {
     event?.preventDefault();
@@ -21,9 +28,18 @@ export function MessageInput({ disabled = false, onOpenStorage, onSend }: Messag
     try {
       await onSend(trimmed);
       setText("");
+      onTyping?.(false);
     } finally {
       setSending(false);
     }
+  }
+
+  function handleChange(event: ChangeEvent<HTMLTextAreaElement>) {
+    const next = event.target.value;
+    setText(next);
+    onTyping?.(next.trim().length > 0);
+    if (typingTimer.current !== null) window.clearTimeout(typingTimer.current);
+    typingTimer.current = window.setTimeout(() => onTyping?.(false), 1_800);
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -50,7 +66,7 @@ export function MessageInput({ disabled = false, onOpenStorage, onSend }: Messag
           placeholder="Write a message…"
           rows={1}
           disabled={disabled}
-          onChange={(event) => setText(event.target.value)}
+          onChange={handleChange}
           onKeyDown={handleKeyDown}
         />
       </label>

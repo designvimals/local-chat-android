@@ -20,7 +20,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.example.privatevault.util.PathUtils
@@ -35,7 +34,7 @@ fun StorageBrowserScreen(
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.state.collectAsState()
-    val context = LocalContext.current
+    val downloadWebOnlyMessage = stringResource(R.string.storage_download_web_only)
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
@@ -79,7 +78,7 @@ fun StorageBrowserScreen(
                             onOpenFolder = { viewModel.load(it.path) },
                             onDownload = {
                                 scope.launch {
-                                    snackbarHostState.showSnackbar(context.getString(R.string.storage_download_web_only))
+                                    snackbarHostState.showSnackbar(downloadWebOnlyMessage)
                                 }
                             }
                         )

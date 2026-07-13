@@ -26,7 +26,16 @@ fun Route.chatRoutes(chatRepository: ChatRepository, pairedToken: String) {
                 call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Type a message before sending."))
                 return@post
             }
-            val message = chatRepository.receiveMessage(body.id, body.senderDeviceId, text, body.timestamp)
+            val message = chatRepository.receiveMessage(
+                Message(
+                    id = body.id,
+                    senderDeviceId = body.senderDeviceId,
+                    receiverDeviceId = "storage-owner-phone",
+                    text = text,
+                    timestamp = body.timestamp,
+                    status = "pending"
+                )
+            )
             call.respond(HttpStatusCode.Created, SendMessageResponse(ok = true, messageId = message.id))
         }
 

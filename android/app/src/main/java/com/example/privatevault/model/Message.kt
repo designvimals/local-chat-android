@@ -11,5 +11,6 @@ data class Message(
     val timestamp: String,
     val status: String,
     val deliveredAt: String? = null,
-    val readAt: String? = null
+    val readAt: String? = null,
+    val attachment: ChatAttachment? = null
 )

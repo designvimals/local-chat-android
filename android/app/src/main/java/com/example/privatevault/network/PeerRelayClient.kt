@@ -1,11 +1,14 @@
 package com.example.privatevault.network
 
+import android.util.Base64
+import com.example.privatevault.attachment.AttachmentManager
 import com.example.privatevault.BuildConfig
 import com.example.privatevault.data.local.PeerConnection
 import com.example.privatevault.data.local.TokenStore
 import com.example.privatevault.data.repository.ChatRepository
 import com.example.privatevault.data.repository.DeviceRepository
 import com.example.privatevault.model.Message
+import com.example.privatevault.model.ChatAttachment
 import com.example.privatevault.util.TimeUtils
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
@@ -63,6 +66,7 @@ class PeerRelayClient(
     private val tokenStore: TokenStore,
     private val deviceRepository: DeviceRepository,
     private val chatRepository: ChatRepository,
+    private val attachmentManager: AttachmentManager,
     private val baseUrl: String = BuildConfig.BACKEND_URL
 ) {
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -73,6 +77,8 @@ class PeerRelayClient(
         }
     }
     private val pending = ConcurrentHashMap<String, CompletableDeferred<JsonObject>>()
+    private val downloads = ConcurrentHashMap<String, PendingAttachmentDownload>()
+    private val uploadedAttachments = ConcurrentHashMap.newKeySet<String>()
     private val syncMutex = Mutex()
     private val _state = MutableStateFlow<PeerConnectionState>(PeerConnectionState.Disconnected)
     val state: StateFlow<PeerConnectionState> = _state
@@ -141,6 +147,8 @@ class PeerRelayClient(
             chatRepository.setPeerConnected(false)
             pending.values.forEach { it.cancel() }
             pending.clear()
+            downloads.values.forEach { it.completion.cancel() }
+            downloads.clear()
         }
     }
 
@@ -174,7 +182,34 @@ class PeerRelayClient(
                 }
                 "response" -> {
                     val requestId = message["requestId"]?.jsonPrimitive?.contentOrNull ?: continue
+                    val download = downloads.remove(requestId)
+                    if (download != null) {
+                        attachmentManager.discardIncoming(download.attachment.id)
+                        download.completion.completeExceptionally(
+                            IllegalStateException(message["error"]?.jsonPrimitive?.contentOrNull ?: "Attachment transfer failed.")
+                        )
+                        continue
+                    }
                     pending.remove(requestId)?.complete(message)
+                }
+                "download.start" -> {
+                    val requestId = message["requestId"]?.jsonPrimitive?.contentOrNull ?: continue
+                    downloads[requestId]?.let { attachmentManager.beginIncoming(it.attachment) }
+                }
+                "download.chunk" -> {
+                    val requestId = message["requestId"]?.jsonPrimitive?.contentOrNull ?: continue
+                    val data = message["data"]?.jsonPrimitive?.contentOrNull ?: continue
+                    downloads[requestId]?.let {
+                        attachmentManager.appendIncomingChunk(it.attachment.id, Base64.decode(data, Base64.DEFAULT))
+                    }
+                }
+                "download.complete" -> {
+                    val requestId = message["requestId"]?.jsonPrimitive?.contentOrNull ?: continue
+                    downloads.remove(requestId)?.let { download ->
+                        runCatching { attachmentManager.finishIncoming(download.attachment) }
+                            .onSuccess { download.completion.complete(Unit) }
+                            .onFailure(download.completion::completeExceptionally)
+                    }
                 }
             }
         }
@@ -185,9 +220,17 @@ class PeerRelayClient(
             val firstSync = request(session, "chat.sync", buildJsonObject {
                 put("readerDeviceId", deviceRepository.deviceId)
             })
-            mergeResponseMessages(firstSync)
+            downloadMissingAttachments(session, mergeResponseMessages(firstSync))
+
+            request(session, "chat.typing", buildJsonObject {
+                put("typing", chatRepository.isLocalTyping())
+            })
 
             for (message in chatRepository.pendingForPeer()) {
+                message.attachment?.takeUnless { uploadedAttachments.contains(it.id) }?.let { attachment ->
+                    uploadAttachment(session, attachment)
+                    uploadedAttachments.add(attachment.id)
+                }
                 val response = request(session, "chat.send", buildJsonObject {
                     put("message", json.encodeToJsonElement(message))
                 })
@@ -200,15 +243,65 @@ class PeerRelayClient(
                 put("readerDeviceId", deviceRepository.deviceId)
                 put("readAt", TimeUtils.nowIso())
             })
-            mergeResponseMessages(request(session, "chat.sync", buildJsonObject {
+            downloadMissingAttachments(session, mergeResponseMessages(request(session, "chat.sync", buildJsonObject {
                 put("readerDeviceId", deviceRepository.deviceId)
-            }))
+            })))
         }
     }
 
-    private fun mergeResponseMessages(payload: JsonObject) {
-        val messages = payload["messages"]?.jsonArray?.map { json.decodeFromJsonElement<Message>(it) } ?: return
+    private fun mergeResponseMessages(payload: JsonObject): List<Message> {
+        chatRepository.setRemoteTyping(payload["typing"]?.jsonPrimitive?.contentOrNull == "true")
+        val messages = payload["messages"]?.jsonArray?.map { json.decodeFromJsonElement<Message>(it) }.orEmpty()
         chatRepository.mergeFromPeer(messages)
+        return messages
+    }
+
+    private suspend fun uploadAttachment(session: DefaultClientWebSocketSession, attachment: ChatAttachment) {
+        request(session, "chat.attachment.upload.start", buildJsonObject {
+            put("attachment", json.encodeToJsonElement(attachment))
+        })
+        attachmentManager.open(attachment.id).buffered().use { input ->
+            val buffer = ByteArray(48 * 1024)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                request(session, "chat.attachment.upload.chunk", buildJsonObject {
+                    put("attachmentId", attachment.id)
+                    put("data", Base64.encodeToString(buffer, 0, count, Base64.NO_WRAP))
+                })
+            }
+        }
+        request(session, "chat.attachment.upload.complete", buildJsonObject {
+            put("attachment", json.encodeToJsonElement(attachment))
+        })
+    }
+
+    private suspend fun downloadMissingAttachments(session: DefaultClientWebSocketSession, messages: List<Message>) {
+        messages.asSequence()
+            .filter { it.senderDeviceId != deviceRepository.deviceId }
+            .mapNotNull(Message::attachment)
+            .filterNot { attachmentManager.hasLocalBytes(it.id) }
+            .distinctBy(ChatAttachment::id)
+            .forEach { downloadAttachment(session, it) }
+    }
+
+    private suspend fun downloadAttachment(session: DefaultClientWebSocketSession, attachment: ChatAttachment) {
+        val requestId = UUID.randomUUID().toString()
+        val completion = CompletableDeferred<Unit>()
+        downloads[requestId] = PendingAttachmentDownload(attachment, completion)
+        session.sendJson(buildJsonObject {
+            put("type", "chat.attachment.download")
+            put("requestId", requestId)
+            put("payload", buildJsonObject { put("attachmentId", attachment.id) })
+        })
+        try {
+            withTimeout(10 * 60_000) { completion.await() }
+        } catch (error: Throwable) {
+            attachmentManager.discardIncoming(attachment.id)
+            throw error
+        } finally {
+            downloads.remove(requestId)
+        }
     }
 
     private suspend fun request(
@@ -248,4 +341,9 @@ class PeerRelayClient(
     private fun JsonObject.requireString(name: String): String {
         return get(name)?.jsonPrimitive?.contentOrNull ?: error("Missing $name")
     }
+
+    private data class PendingAttachmentDownload(
+        val attachment: ChatAttachment,
+        val completion: CompletableDeferred<Unit>
+    )
 }

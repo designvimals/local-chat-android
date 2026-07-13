@@ -8,179 +8,134 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import androidx.activity.ComponentActivity
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.setContent
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.privatevault.app.PrivateVaultApp
+import com.example.privatevault.app.PrivateVaultApplication
 import com.example.privatevault.attachment.AttachmentManager
 import com.example.privatevault.backup.ChatBackupManager
-import com.example.privatevault.data.local.MessageStore
 import com.example.privatevault.data.local.SettingsStore
 import com.example.privatevault.data.local.TokenStore
 import com.example.privatevault.data.repository.ChatRepository
-import com.example.privatevault.data.repository.DeviceRepository
 import com.example.privatevault.data.repository.StorageRepository
 import com.example.privatevault.network.BackendClient
 import com.example.privatevault.network.PeerRelayClient
 import com.example.privatevault.network.AppUpdate
 import com.example.privatevault.network.GithubUpdateChecker
-import com.example.privatevault.server.LocalServerManager
-import com.example.privatevault.server.PathResolver
+import com.example.privatevault.model.ChatAttachment
 import com.example.privatevault.service.StorageSessionNotifier
+import com.example.privatevault.security.AppLockManager
+import com.example.privatevault.ui.lock.AppLockGate
 import com.example.privatevault.ui.screen.pairing.PairingViewModel
 import com.example.privatevault.ui.theme.PrivateVaultTheme
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     private lateinit var settingsStore: SettingsStore
     private lateinit var tokenStore: TokenStore
-    private lateinit var serverManager: LocalServerManager
     private lateinit var backendClient: BackendClient
     private lateinit var peerRelayClient: PeerRelayClient
+    private lateinit var attachmentManager: AttachmentManager
     private lateinit var chatRepository: ChatRepository
     private lateinit var storageRepository: StorageRepository
     private lateinit var notifier: StorageSessionNotifier
-    private var registrationJob: Job? = null
-    private var peerRegistrationJob: Job? = null
+    private lateinit var appLockManager: AppLockManager
     private val availableUpdate = MutableStateFlow<AppUpdate?>(null)
     private var dismissedUpdateVersion: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
 
-        settingsStore = SettingsStore(applicationContext)
-        tokenStore = TokenStore(applicationContext)
-        val messageStore = MessageStore(applicationContext, tokenStore)
-        val deviceRepository = DeviceRepository(tokenStore)
-        val pathResolver = PathResolver()
+        val runtime = (application as PrivateVaultApplication).runtime
+        appLockManager = runtime.appLockManager
+        settingsStore = runtime.settingsStore
+        tokenStore = runtime.tokenStore
+        attachmentManager = runtime.attachmentManager
         notifier = StorageSessionNotifier(applicationContext)
-
-        chatRepository = ChatRepository(messageStore, tokenStore)
-        storageRepository = StorageRepository(pathResolver)
-        serverManager = LocalServerManager(
-            settingsStore = settingsStore,
-            chatRepository = chatRepository,
-            pathResolver = pathResolver,
-            deviceRepository = deviceRepository,
-            notifier = notifier
-        )
-        backendClient = BackendClient(
-            tokenStore = tokenStore,
-            deviceRepository = deviceRepository,
-            chatRepository = chatRepository,
-            pathResolver = pathResolver,
-            settingsStore = settingsStore
-        )
-        peerRelayClient = PeerRelayClient(
-            tokenStore = tokenStore,
-            deviceRepository = deviceRepository,
-            chatRepository = chatRepository
-        )
+        chatRepository = runtime.chatRepository
+        storageRepository = runtime.storageRepository
+        backendClient = runtime.backendClient
+        peerRelayClient = runtime.peerRelayClient
 
         setContent {
             PrivateVaultTheme {
-                PrivateVaultApp(
-                    settingsStore = settingsStore,
-                    chatRepository = chatRepository,
-                    storageRepository = storageRepository,
-                    pairingViewModelFactory = { PairingViewModel(tokenStore, peerRelayClient, ::restartPeerRelay) },
-                    registrationState = backendClient.registrationState,
-                    onStorageSharingChanged = ::applySharingState,
-                    onPairingCodeRotated = ::restartRelay,
-                    onRetryRegistration = ::restartRelay,
-                    availableUpdate = availableUpdate,
-                    onDismissUpdate = ::dismissUpdate,
-                    onDownloadUpdate = ::downloadUpdate,
-                    onAttachFile = ::attachFile,
-                    onBackupNow = ::backupNow
-                )
+                AppLockGate(manager = appLockManager) {
+                    PrivateVaultApp(
+                        settingsStore = settingsStore,
+                        chatRepository = chatRepository,
+                        storageRepository = storageRepository,
+                        pairingViewModelFactory = { PairingViewModel(tokenStore, peerRelayClient, ::restartPeerRelay) },
+                        registrationState = backendClient.registrationState,
+                        onStorageSharingChanged = ::applySharingState,
+                        onPairingCodeRotated = ::restartRelay,
+                        onRetryRegistration = ::restartRelay,
+                        availableUpdate = availableUpdate,
+                        onDismissUpdate = ::dismissUpdate,
+                        onDownloadUpdate = ::downloadUpdate,
+                        attachmentManager = attachmentManager,
+                        onAttachFile = ::attachFile,
+                        onBackupNow = ::backupNow,
+                        onResetDebugKey = appLockManager::setDebugKey
+                    )
+                }
             }
         }
     }
 
     override fun onStart() {
         super.onStart()
+        appLockManager.onAppForegrounded()
         lifecycleScope.launch {
             val storageAccessGranted = hasStorageAccess(this@MainActivity)
             settingsStore.setStoragePermissionGranted(storageAccessGranted)
             if (settingsStore.onboardingComplete.first()) {
-                if (storageAccessGranted) {
-                    settingsStore.setStorageSharingEnabled(true)
-                }
-                applySharingState(storageAccessGranted)
+                applySharingState(settingsStore.storageSharingEnabled.first() && storageAccessGranted)
             }
         }
-        startPeerRelayLoop()
         lifecycleScope.launch {
             val update = GithubUpdateChecker.findAvailableUpdate()
             availableUpdate.value = update?.takeUnless { it.version == dismissedUpdateVersion }
         }
     }
 
+    override fun onStop() {
+        appLockManager.onAppBackgrounded()
+        super.onStop()
+    }
+
     private fun applySharingState(enabled: Boolean) {
         lifecycleScope.launch {
             withContext(Dispatchers.IO) {
                 val storageAvailable = enabled && hasStorageAccess(this@MainActivity)
-                serverManager.start(tokenStore.getAccessToken())
                 notifier.markAvailable(storageAvailable)
-                backendClient.updateStorageSharing(storageAvailable)
             }
-            startRelayLoop()
         }
     }
 
     private fun restartRelay() {
         lifecycleScope.launch {
             backendClient.restartConnection()
-            startRelayLoop()
+            val storageAvailable = settingsStore.storageSharingEnabled.first() &&
+                hasStorageAccess(this@MainActivity)
+            notifier.markAvailable(storageAvailable)
         }
     }
 
     private fun restartPeerRelay() {
         lifecycleScope.launch {
             peerRelayClient.restartConnection()
-            peerRegistrationJob?.cancel()
-            peerRegistrationJob = null
-            startPeerRelayLoop()
         }
     }
 
-    private fun startRelayLoop() {
-        if (registrationJob?.isActive == true) return
-        registrationJob = lifecycleScope.launch(Dispatchers.IO) {
-            while (isActive) {
-                val storageAvailable = settingsStore.storageSharingEnabled.first() &&
-                    hasStorageAccess(this@MainActivity)
-                backendClient.connectRelay(storageSharingEnabled = storageAvailable)
-                delay(2_000)
-            }
-        }
-    }
-
-    private fun startPeerRelayLoop() {
-        if (peerRegistrationJob?.isActive == true) return
-        peerRegistrationJob = lifecycleScope.launch(Dispatchers.IO) {
-            while (isActive) {
-                val connection = tokenStore.getPeerConnection()
-                if (connection == null) {
-                    delay(2_000)
-                    continue
-                }
-                peerRelayClient.connectPeer(connection)
-                delay(2_000)
-            }
-        }
-    }
-
-    private suspend fun attachFile(uri: Uri): Result<String> = withContext(Dispatchers.IO) {
-        runCatching { AttachmentManager(applicationContext).stageForWeb(uri).name }
+    private suspend fun attachFile(uri: Uri): Result<ChatAttachment> = withContext(Dispatchers.IO) {
+        runCatching { attachmentManager.registerOriginal(uri) }
     }
 
     private suspend fun backupNow(): Result<String> = withContext(Dispatchers.IO) {
