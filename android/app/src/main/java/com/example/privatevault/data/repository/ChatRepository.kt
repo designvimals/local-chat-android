@@ -4,6 +4,8 @@ import com.example.privatevault.data.local.MessageStore
 import com.example.privatevault.data.local.TokenStore
 import com.example.privatevault.model.ChatAttachment
 import com.example.privatevault.model.Message
+import com.example.privatevault.model.MessageEmphasis
+import com.example.privatevault.model.MessageReaction
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 
@@ -18,13 +20,23 @@ class ChatRepository(
     val remoteTyping: StateFlow<Boolean> = _remoteTyping
     private val _localTyping = MutableStateFlow(false)
 
-    fun sendMessage(text: String): Message {
-        return messageStore.addLocalMessage(text.trim())
+    fun sendMessage(
+        text: String,
+        emphasisLevel: Int = MessageEmphasis.Normal.storedValue
+    ): Message {
+        return messageStore.addLocalMessage(text.trim(), emphasisLevel = emphasisLevel)
     }
 
     fun sendAttachment(attachment: ChatAttachment, caption: String = ""): Message {
         return messageStore.addLocalMessage(caption.trim(), attachment)
     }
+
+    fun toggleReaction(messageId: String, emoji: String) {
+        messageStore.toggleReaction(messageId, emoji)
+    }
+
+    fun isCurrentUserReaction(reaction: MessageReaction): Boolean =
+        tokenStore.getDeviceId() in reaction.reactorDeviceIds
 
     fun receiveMessage(incoming: Message): Message {
         markViewerConnected()

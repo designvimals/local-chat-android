@@ -6,17 +6,22 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.os.Environment
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.setContent
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.metrics.performance.JankStats
+import androidx.compose.runtime.getValue
 import com.example.privatevault.app.PrivateVaultApp
 import com.example.privatevault.app.PrivateVaultApplication
 import com.example.privatevault.attachment.AttachmentManager
 import com.example.privatevault.backup.ChatBackupManager
 import com.example.privatevault.data.local.SettingsStore
+import com.example.privatevault.data.local.ThemePreference
 import com.example.privatevault.data.local.TokenStore
 import com.example.privatevault.data.repository.ChatRepository
 import com.example.privatevault.data.repository.StorageRepository
@@ -48,10 +53,18 @@ class MainActivity : ComponentActivity() {
     private lateinit var appLockManager: AppLockManager
     private val availableUpdate = MutableStateFlow<AppUpdate?>(null)
     private var dismissedUpdateVersion: String? = null
+    private var jankStats: JankStats? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        if (BuildConfig.DEBUG) {
+            jankStats = JankStats.createAndTrack(window) { frameData ->
+                if (frameData.isJank) {
+                    Log.w(JANK_LOG_TAG, "Janky frame: ${frameData.frameDurationUiNanos / 1_000_000f} ms")
+                }
+            }
+        }
 
         val runtime = (application as PrivateVaultApplication).runtime
         appLockManager = runtime.appLockManager
@@ -65,7 +78,10 @@ class MainActivity : ComponentActivity() {
         peerRelayClient = runtime.peerRelayClient
 
         setContent {
-            PrivateVaultTheme {
+            val themePreference by settingsStore.themePreference.collectAsStateWithLifecycle(
+                initialValue = ThemePreference.System
+            )
+            PrivateVaultTheme(themePreference = themePreference) {
                 AppLockGate(manager = appLockManager) {
                     PrivateVaultApp(
                         settingsStore = settingsStore,
@@ -82,7 +98,11 @@ class MainActivity : ComponentActivity() {
                         attachmentManager = attachmentManager,
                         onAttachFile = ::attachFile,
                         onBackupNow = ::backupNow,
-                        onResetDebugKey = appLockManager::setDebugKey
+                        onResetDebugKey = appLockManager::setDebugKey,
+                        themePreference = themePreference,
+                        onThemePreferenceChanged = { preference ->
+                            lifecycleScope.launch { settingsStore.setThemePreference(preference) }
+                        }
                     )
                 }
             }
@@ -105,9 +125,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        if (::appLockManager.isInitialized) appLockManager.onUserInteraction()
+    }
+
     override fun onStop() {
         appLockManager.onAppBackgrounded()
         super.onStop()
+    }
+
+    override fun onDestroy() {
+        jankStats?.isTrackingEnabled = false
+        jankStats = null
+        super.onDestroy()
     }
 
     private fun applySharingState(enabled: Boolean) {
@@ -155,6 +186,8 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
+        private const val JANK_LOG_TAG = "ChatFrameTiming"
+
         fun hasStorageAccess(context: Context): Boolean {
             return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 Environment.isExternalStorageManager()

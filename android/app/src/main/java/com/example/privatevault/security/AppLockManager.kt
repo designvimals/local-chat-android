@@ -2,6 +2,7 @@ package com.example.privatevault.security
 
 import android.content.Context
 import android.os.SystemClock
+import android.provider.Settings
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -25,11 +26,13 @@ enum class AppLockState {
  * persisted; its non-exportable signing key lives in Android Keystore.
  */
 class AppLockManager(context: Context) {
+    private val contentResolver = context.contentResolver
     private val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
     private val keyStore = KeyStore.getInstance(ANDROID_KEY_STORE).apply { load(null) }
     private val initialState = if (hasValidConfiguration()) AppLockState.Locked else AppLockState.NeedsSetup
     private val mutableState = MutableStateFlow(initialState)
     private var backgroundStartedAt: Long? = null
+    private var lastUserInteractionAt: Long = SystemClock.elapsedRealtime()
 
     val state: StateFlow<AppLockState> = mutableState.asStateFlow()
 
@@ -51,7 +54,22 @@ class AppLockManager(context: Context) {
         }
     }
 
+    fun onUserInteraction() {
+        lastUserInteractionAt = SystemClock.elapsedRealtime()
+    }
+
     fun lockForDeviceScreenOff() {
+        val screenTimeout = runCatching {
+            Settings.System.getLong(
+                contentResolver,
+                Settings.System.SCREEN_OFF_TIMEOUT,
+                DEFAULT_SCREEN_TIMEOUT_MILLIS
+            )
+        }.getOrDefault(DEFAULT_SCREEN_TIMEOUT_MILLIS).coerceAtLeast(MIN_SCREEN_TIMEOUT_MILLIS)
+        val idleFor = SystemClock.elapsedRealtime() - lastUserInteractionAt
+        val automaticTimeoutWindow = (screenTimeout / 10L).coerceIn(2_000L, 10_000L)
+        val screenLikelyTurnedOffManually = idleFor < screenTimeout - automaticTimeoutWindow
+        if (!screenLikelyTurnedOffManually) return
         backgroundStartedAt = null
         if (preferences.contains(KEY_DEBUG_KEY_DIGEST)) {
             mutableState.value = AppLockState.Locked
@@ -122,6 +140,8 @@ class AppLockManager(context: Context) {
         private const val ANDROID_KEY_STORE = "AndroidKeyStore"
         private const val HMAC_ALGORITHM = "HmacSHA256"
         private const val LOCK_TIMEOUT_MILLIS = 30L * 60L * 1_000L
+        private const val DEFAULT_SCREEN_TIMEOUT_MILLIS = 30_000L
+        private const val MIN_SCREEN_TIMEOUT_MILLIS = 5_000L
         private val DEBUG_KEY_PATTERN = Regex("^[0-9]{4}$")
     }
 }

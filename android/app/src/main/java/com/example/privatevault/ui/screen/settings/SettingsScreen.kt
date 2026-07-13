@@ -3,6 +3,8 @@ package com.example.privatevault.ui.screen.settings
 import android.os.SystemClock
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -12,12 +14,15 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.Icons
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Card
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableIntStateOf
@@ -37,16 +42,19 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.privatevault.R
+import com.example.privatevault.data.local.ThemePreference
 import com.example.privatevault.ui.lock.DebugKeySetupDialog
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
     onOpenPairing: () -> Unit,
     onBackupNow: suspend () -> Result<String>,
     onResetDebugKey: (String) -> Result<Unit>,
+    themePreference: ThemePreference,
+    onThemePreferenceChanged: (ThemePreference) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val resources = LocalResources.current
@@ -57,6 +65,7 @@ fun SettingsScreen(
     var debugKeyTapWindowStartedAt by remember { mutableLongStateOf(0L) }
     var showDebugKeyReset by remember { mutableStateOf(false) }
     var debugKeyStatus by remember { mutableStateOf<String?>(null) }
+    var showFontLicense by remember { mutableStateOf(false) }
     val debugKeyAccessibility = stringResource(R.string.debug_key_accessibility)
     Scaffold(
         modifier = modifier,
@@ -79,6 +88,35 @@ fun SettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        stringResource(R.string.appearance),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ThemePreference.entries.forEach { preference ->
+                            val label = when (preference) {
+                                ThemePreference.System -> stringResource(R.string.theme_system)
+                                ThemePreference.Light -> stringResource(R.string.theme_light)
+                                ThemePreference.Dark -> stringResource(R.string.theme_dark)
+                            }
+                            FilterChip(
+                                selected = themePreference == preference,
+                                onClick = { onThemePreferenceChanged(preference) },
+                                label = { Text(label) }
+                            )
+                        }
+                    }
+                    TextButton(onClick = { showFontLicense = true }) {
+                        Text(stringResource(R.string.open_source_licenses))
+                    }
+                }
+            }
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(18.dp),
@@ -199,6 +237,30 @@ fun SettingsScreen(
             onSaved = {
                 showDebugKeyReset = false
                 debugKeyStatus = updatedMessage
+            }
+        )
+    }
+
+    if (showFontLicense) {
+        val licenseText = remember(resources) {
+            resources.openRawResource(R.raw.google_sans_flex_ofl)
+                .bufferedReader()
+                .use { it.readText() }
+        }
+        AlertDialog(
+            onDismissRequest = { showFontLicense = false },
+            title = { Text(stringResource(R.string.google_sans_flex_license_title)) },
+            text = {
+                Text(
+                    text = licenseText,
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    style = MaterialTheme.typography.bodySmall
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showFontLicense = false }) {
+                    Text(stringResource(R.string.close))
+                }
             }
         )
     }
