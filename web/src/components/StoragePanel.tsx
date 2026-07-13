@@ -19,6 +19,9 @@ interface BulkProgress {
 }
 
 type DownloadedFile = Awaited<ReturnType<RelayClient["download"]>>;
+const RECEIVER_BATCH_SIZE = 3;
+const ZIP_PART_SIZE = 5;
+const ZIP_PART_BYTES = 64 * 1024 * 1024;
 
 export function StoragePanel({ relay, fullScreen = false, onClose }: StoragePanelProps) {
   const [path, setPath] = useState("/");
@@ -110,6 +113,15 @@ export function StoragePanel({ relay, fullScreen = false, onClose }: StoragePane
       });
       const file = await relay.download(item.path);
       await onDownloaded(file);
+      if ((index + 1) % RECEIVER_BATCH_SIZE === 0 && index + 1 < currentSelection.length) {
+        setBulkProgress({
+          completed: index + 1,
+          total: currentSelection.length,
+          label: "Pausing briefly to keep this device responsive…",
+          phase: "downloading"
+        });
+        await receiverPause();
+      }
     }
     return currentSelection.length;
   }
@@ -119,7 +131,10 @@ export function StoragePanel({ relay, fullScreen = false, onClose }: StoragePane
     setError(null);
     setNotice(null);
     try {
-      const downloadedCount = await downloadSelectedFiles((file) => saveBlob(file.blob, file.name));
+      const downloadedCount = await downloadSelectedFiles(async (file) => {
+        saveBlob(file.blob, file.name);
+        await shortReceiverPause();
+      });
       setNotice(
         `Started ${downloadedCount} separate downloads. If only one appears, allow multiple downloads in your browser and try again.`
       );
@@ -135,21 +150,39 @@ export function StoragePanel({ relay, fullScreen = false, onClose }: StoragePane
     if (selectedFiles.length === 0 || bulkProgress) return;
     setError(null);
     setNotice(null);
-    const archive: AsyncZippable = {};
     try {
-      const downloadedCount = await downloadSelectedFiles(async (file) => {
-        archive[uniqueArchiveName(file.name, archive)] = new Uint8Array(await file.blob.arrayBuffer());
-      });
-      setBulkProgress({
-        completed: downloadedCount,
-        total: downloadedCount,
-        label: "Creating ZIP…",
-        phase: "packing"
-      });
-      const zipped = await createZip(archive);
-      const zipName = archiveName(path);
-      saveBlob(new Blob([zipped], { type: "application/zip" }), zipName);
-      setNotice(`Downloaded ${downloadedCount} files as ${zipName}.`);
+      const selection = [...selectedFiles];
+      const parts = zipParts(selection);
+      let completed = 0;
+      for (const [partIndex, part] of parts.entries()) {
+        const archive: AsyncZippable = {};
+        for (const item of part) {
+          setBulkProgress({
+            completed,
+            total: selection.length,
+            label: item.name,
+            phase: "downloading"
+          });
+          const file = await relay.download(item.path);
+          archive[uniqueArchiveName(file.name, archive)] = new Uint8Array(await file.blob.arrayBuffer());
+          completed += 1;
+        }
+        setBulkProgress({
+          completed,
+          total: selection.length,
+          label: parts.length > 1 ? `Creating ZIP part ${partIndex + 1} of ${parts.length}…` : "Creating ZIP…",
+          phase: "packing"
+        });
+        const zipped = await createZip(archive);
+        const zipName = archiveName(path, partIndex + 1, parts.length);
+        saveBlob(new Blob([zipped], { type: "application/zip" }), zipName);
+        await receiverPause();
+      }
+      setNotice(
+        parts.length > 1
+          ? `Downloaded ${selection.length} files in ${parts.length} smaller ZIP parts to reduce memory load.`
+          : `Downloaded ${selection.length} files as ${archiveName(path, 1, 1)}.`
+      );
       leaveSelectionMode();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Bulk download failed.");
@@ -281,7 +314,7 @@ function saveBlob(blob: Blob, name: string) {
   document.body.append(anchor);
   anchor.click();
   anchor.remove();
-  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000);
 }
 
 function createZip(files: AsyncZippable): Promise<Uint8Array<ArrayBuffer>> {
@@ -303,8 +336,34 @@ function uniqueArchiveName(name: string, archive: AsyncZippable): string {
   return `${base} (${copy})${extension}`;
 }
 
-function archiveName(path: string): string {
+function archiveName(path: string, part: number, totalParts: number): string {
   const folder = path.split("/").filter(Boolean).at(-1) ?? "shared-files";
   const safeFolder = folder.replace(/[<>:"/\\|?*\u0000-\u001F]/g, "-").trim() || "shared-files";
-  return `${safeFolder}.zip`;
+  return totalParts > 1 ? `${safeFolder}-part-${part}-of-${totalParts}.zip` : `${safeFolder}.zip`;
+}
+
+function zipParts(items: FileItem[]): FileItem[][] {
+  const chunks: FileItem[][] = [];
+  let current: FileItem[] = [];
+  let currentBytes = 0;
+  for (const item of items) {
+    const size = item.size ?? 0;
+    if (current.length > 0 && (current.length >= ZIP_PART_SIZE || currentBytes + size > ZIP_PART_BYTES)) {
+      chunks.push(current);
+      current = [];
+      currentBytes = 0;
+    }
+    current.push(item);
+    currentBytes += size;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
+
+function receiverPause(): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, 900));
+}
+
+function shortReceiverPause(): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, 250));
 }

@@ -12,6 +12,8 @@ import androidx.activity.compose.setContent
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.privatevault.app.PrivateVaultApp
+import com.example.privatevault.attachment.AttachmentManager
+import com.example.privatevault.backup.ChatBackupManager
 import com.example.privatevault.data.local.MessageStore
 import com.example.privatevault.data.local.SettingsStore
 import com.example.privatevault.data.local.TokenStore
@@ -19,6 +21,7 @@ import com.example.privatevault.data.repository.ChatRepository
 import com.example.privatevault.data.repository.DeviceRepository
 import com.example.privatevault.data.repository.StorageRepository
 import com.example.privatevault.network.BackendClient
+import com.example.privatevault.network.PeerRelayClient
 import com.example.privatevault.network.AppUpdate
 import com.example.privatevault.network.GithubUpdateChecker
 import com.example.privatevault.server.LocalServerManager
@@ -40,10 +43,12 @@ class MainActivity : ComponentActivity() {
     private lateinit var tokenStore: TokenStore
     private lateinit var serverManager: LocalServerManager
     private lateinit var backendClient: BackendClient
+    private lateinit var peerRelayClient: PeerRelayClient
     private lateinit var chatRepository: ChatRepository
     private lateinit var storageRepository: StorageRepository
     private lateinit var notifier: StorageSessionNotifier
     private var registrationJob: Job? = null
+    private var peerRegistrationJob: Job? = null
     private val availableUpdate = MutableStateFlow<AppUpdate?>(null)
     private var dismissedUpdateVersion: String? = null
 
@@ -73,6 +78,11 @@ class MainActivity : ComponentActivity() {
             pathResolver = pathResolver,
             settingsStore = settingsStore
         )
+        peerRelayClient = PeerRelayClient(
+            tokenStore = tokenStore,
+            deviceRepository = deviceRepository,
+            chatRepository = chatRepository
+        )
 
         setContent {
             PrivateVaultTheme {
@@ -80,14 +90,16 @@ class MainActivity : ComponentActivity() {
                     settingsStore = settingsStore,
                     chatRepository = chatRepository,
                     storageRepository = storageRepository,
-                    pairingViewModelFactory = { PairingViewModel(tokenStore) },
+                    pairingViewModelFactory = { PairingViewModel(tokenStore, peerRelayClient, ::restartPeerRelay) },
                     registrationState = backendClient.registrationState,
                     onStorageSharingChanged = ::applySharingState,
                     onPairingCodeRotated = ::restartRelay,
                     onRetryRegistration = ::restartRelay,
                     availableUpdate = availableUpdate,
                     onDismissUpdate = ::dismissUpdate,
-                    onDownloadUpdate = ::downloadUpdate
+                    onDownloadUpdate = ::downloadUpdate,
+                    onAttachFile = ::attachFile,
+                    onBackupNow = ::backupNow
                 )
             }
         }
@@ -105,6 +117,7 @@ class MainActivity : ComponentActivity() {
                 applySharingState(storageAccessGranted)
             }
         }
+        startPeerRelayLoop()
         lifecycleScope.launch {
             val update = GithubUpdateChecker.findAvailableUpdate()
             availableUpdate.value = update?.takeUnless { it.version == dismissedUpdateVersion }
@@ -130,6 +143,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun restartPeerRelay() {
+        lifecycleScope.launch {
+            peerRelayClient.restartConnection()
+            peerRegistrationJob?.cancel()
+            peerRegistrationJob = null
+            startPeerRelayLoop()
+        }
+    }
+
     private fun startRelayLoop() {
         if (registrationJob?.isActive == true) return
         registrationJob = lifecycleScope.launch(Dispatchers.IO) {
@@ -140,6 +162,29 @@ class MainActivity : ComponentActivity() {
                 delay(2_000)
             }
         }
+    }
+
+    private fun startPeerRelayLoop() {
+        if (peerRegistrationJob?.isActive == true) return
+        peerRegistrationJob = lifecycleScope.launch(Dispatchers.IO) {
+            while (isActive) {
+                val connection = tokenStore.getPeerConnection()
+                if (connection == null) {
+                    delay(2_000)
+                    continue
+                }
+                peerRelayClient.connectPeer(connection)
+                delay(2_000)
+            }
+        }
+    }
+
+    private suspend fun attachFile(uri: Uri): Result<String> = withContext(Dispatchers.IO) {
+        runCatching { AttachmentManager(applicationContext).stageForWeb(uri).name }
+    }
+
+    private suspend fun backupNow(): Result<String> = withContext(Dispatchers.IO) {
+        runCatching { ChatBackupManager(applicationContext).createBackup("manual").absolutePath }
     }
 
     private fun dismissUpdate(update: AppUpdate) {

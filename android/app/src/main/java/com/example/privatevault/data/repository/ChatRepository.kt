@@ -23,10 +23,31 @@ class ChatRepository(
         return messageStore.receiveMessage(id, senderDeviceId, text.trim(), timestamp)
     }
 
-    fun messagesForViewer(): List<Message> {
+    fun messagesForViewer(readerDeviceId: String = MessageStore.VIEWER_DEVICE_ID): List<Message> {
         markViewerConnected()
-        messageStore.markDeliveredTo(MessageStore.VIEWER_DEVICE_ID)
+        messageStore.markDeliveredTo(readerDeviceId)
         return messageStore.messages.value
+    }
+
+    fun mergeFromPeer(messages: List<Message>) {
+        messageStore.merge(messages)
+    }
+
+    fun pendingForPeer(): List<Message> {
+        val ownDeviceId = tokenStore.getDeviceId()
+        return messageStore.messages.value.filter { message ->
+            message.senderDeviceId == ownDeviceId && message.status in setOf("pending", "sent", "failed")
+        }
+    }
+
+    fun markPeerMessageDelivered(messageId: String, deliveredAt: String) {
+        messageStore.markDelivered(messageId, deliveredAt)
+    }
+
+    fun isMine(message: Message): Boolean = message.senderDeviceId == tokenStore.getDeviceId()
+
+    fun setPeerConnected(connected: Boolean) {
+        _viewerConnected.value = connected || tokenStore.isPairingClaimed()
     }
 
     fun markReadBy(readerDeviceId: String, readAt: String) {

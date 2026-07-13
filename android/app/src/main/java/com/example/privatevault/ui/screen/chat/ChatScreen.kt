@@ -40,11 +40,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.privatevault.network.BackendRegistrationState
+import com.example.privatevault.R
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -55,6 +57,7 @@ fun ChatScreen(
     registrationState: BackendRegistrationState,
     onRetryRegistration: () -> Unit,
     onOpenSettings: () -> Unit,
+    onAttachFile: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val messages by viewModel.messages.collectAsState()
@@ -82,7 +85,7 @@ fun ChatScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = "V",
+                                text = stringResource(R.string.contact_initial).take(1).uppercase(),
                                 color = MaterialTheme.colorScheme.onPrimary,
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.Bold
@@ -90,7 +93,7 @@ fun ChatScreen(
                         }
                         Spacer(Modifier.width(11.dp))
                         Column {
-                            Text("Vimal", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            Text(stringResource(R.string.contact_name), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Box(
                                     modifier = Modifier
@@ -104,10 +107,10 @@ fun ChatScreen(
                                 Spacer(Modifier.width(6.dp))
                                 Text(
                                     text = when {
-                                        viewerConnected -> "Connected"
-                                        registrationState is BackendRegistrationState.Registered -> "Code active"
-                                        registrationState is BackendRegistrationState.Failed -> "Relay offline"
-                                        else -> "Connecting to relay"
+                                        viewerConnected -> stringResource(R.string.status_connected)
+                                        registrationState is BackendRegistrationState.Registered -> stringResource(R.string.status_code_active)
+                                        registrationState is BackendRegistrationState.Failed -> stringResource(R.string.status_relay_offline)
+                                        else -> stringResource(R.string.status_connecting_relay)
                                     },
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -118,13 +121,13 @@ fun ChatScreen(
                 },
                 actions = {
                     IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
+                        Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.settings))
                     }
                 }
             )
         },
         bottomBar = {
-            MessageInputBar(onSend = viewModel::send)
+            MessageInputBar(onSend = viewModel::send, onAttachFile = onAttachFile)
         }
     ) { padding ->
         LazyColumn(
@@ -153,7 +156,7 @@ fun ChatScreen(
                 items(messages, key = { it.id }) { message ->
                     MessageBubble(
                         message = message,
-                        isMine = message.senderDeviceId != "viewer-web"
+                        isMine = viewModel.isMine(message)
                     )
                 }
             }
@@ -181,12 +184,12 @@ private fun PairingCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
                 Spacer(Modifier.width(9.dp))
-                Text("Connect your other device", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(stringResource(R.string.pairing_card_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             }
             when (registrationState) {
                 is BackendRegistrationState.Registered -> {
                     Text(
-                        "Code active on the relay. Enter it on the private web page from any location.",
+                        stringResource(R.string.pairing_card_registered_body),
                         color = MaterialTheme.colorScheme.onSecondaryContainer,
                         style = MaterialTheme.typography.bodyMedium
                     )
@@ -207,19 +210,19 @@ private fun PairingCard(
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodyMedium
                     )
-                    Button(onClick = onRetryRegistration) { Text("Retry relay connection") }
+                    Button(onClick = onRetryRegistration) { Text(stringResource(R.string.retry_relay_connection)) }
                 }
                 BackendRegistrationState.Connecting,
                 BackendRegistrationState.Idle -> {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.width(10.dp))
-                        Text("Registering this code with the relay…")
+                        Text(stringResource(R.string.pairing_registering))
                     }
                 }
             }
             Text(
-                "Messages are saved only on your devices.",
+                stringResource(R.string.messages_device_only),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSecondaryContainer
             )
@@ -238,7 +241,7 @@ private fun EmptyConversation(viewerConnected: Boolean, pairingAvailable: Boolea
         Text("↗", style = MaterialTheme.typography.headlineLarge, color = MaterialTheme.colorScheme.secondary)
         Spacer(Modifier.height(14.dp))
         Text(
-            text = if (viewerConnected) "Your quiet corner" else if (pairingAvailable) "Waiting for your other device" else "Waiting for your paired device",
+            text = if (viewerConnected) stringResource(R.string.empty_connected_title) else if (pairingAvailable) stringResource(R.string.empty_pairing_title) else stringResource(R.string.empty_paired_title),
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.SemiBold,
             textAlign = TextAlign.Center
@@ -246,11 +249,11 @@ private fun EmptyConversation(viewerConnected: Boolean, pairingAvailable: Boolea
         Spacer(Modifier.height(7.dp))
         Text(
             text = if (viewerConnected) {
-                "Messages stay in this phone's messages.txt file and sync when both devices are online."
+                stringResource(R.string.empty_connected_body)
             } else if (pairingAvailable) {
-                "Pair once, then chat and shared files open from the same home screen."
+                stringResource(R.string.empty_pairing_body)
             } else {
-                "Open the paired browser to sync. New messages can wait safely on either device."
+                stringResource(R.string.empty_paired_body)
             },
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,

@@ -19,6 +19,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
+import com.example.privatevault.R
 import com.example.privatevault.model.Message
 import com.example.privatevault.util.TimeUtils
 
@@ -75,10 +77,11 @@ fun MessageBubble(
     }
 }
 
+@Composable
 private fun receiptText(status: String): String = when (status) {
-    "read" -> "✓✓ Read"
-    "delivered" -> "✓✓"
-    "sent" -> "✓"
-    "failed" -> "Waiting"
-    else -> "Waiting"
+    "read" -> stringResource(R.string.receipt_read)
+    "delivered" -> stringResource(R.string.receipt_delivered)
+    "sent" -> stringResource(R.string.receipt_sent)
+    "failed" -> stringResource(R.string.receipt_waiting)
+    else -> stringResource(R.string.receipt_waiting)
 }

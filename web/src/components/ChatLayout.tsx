@@ -41,7 +41,9 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
     }
     syncingRef.current = true;
     try {
-      let remote = await relay.request<{ messages: Message[] }>("chat.sync");
+      let remote = await relay.request<{ messages: Message[] }>("chat.sync", {
+        readerDeviceId: session.viewerDeviceId
+      });
       let merged = mergeMessages(messagesRef.current, remote.messages);
       commitMessages(merged);
 
@@ -67,7 +69,9 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
           readAt: new Date().toISOString()
         });
       }
-      remote = await relay.request<{ messages: Message[] }>("chat.sync");
+      remote = await relay.request<{ messages: Message[] }>("chat.sync", {
+        readerDeviceId: session.viewerDeviceId
+      });
       commitMessages(mergeMessages(messagesRef.current, remote.messages));
       setError(null);
       setLastSeen(new Date().toISOString());

@@ -3,6 +3,7 @@ package com.example.privatevault.app
 import android.Manifest
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
 import android.os.Build
 import android.os.Environment
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -17,6 +18,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -25,6 +27,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.privatevault.data.local.SettingsStore
+import com.example.privatevault.R
 import com.example.privatevault.data.repository.ChatRepository
 import com.example.privatevault.data.repository.StorageRepository
 import com.example.privatevault.network.BackendRegistrationState
@@ -54,6 +57,8 @@ fun PrivateVaultApp(
     availableUpdate: StateFlow<AppUpdate?>,
     onDismissUpdate: (AppUpdate) -> Unit,
     onDownloadUpdate: (AppUpdate) -> Unit,
+    onAttachFile: suspend (Uri) -> Result<String>,
+    onBackupNow: suspend () -> Result<String>,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -84,6 +89,21 @@ fun PrivateVaultApp(
         scope.launch { settingsStore.setStoragePermissionGranted(granted) }
     }
     val notificationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    val attachmentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            scope.launch {
+                onAttachFile(uri)
+                    .onSuccess { fileName -> chatRepository.sendMessage(context.getString(R.string.attachment_message, fileName)) }
+                    .onFailure { error ->
+                        Toast.makeText(
+                            context,
+                            error.message ?: context.getString(R.string.attachment_failed),
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+            }
+        }
+    }
 
     LaunchedEffect(onboardingComplete) {
         if (onboardingComplete && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -126,6 +146,7 @@ fun PrivateVaultApp(
                 registrationState = backendRegistration,
                 onRetryRegistration = onRetryRegistration,
                 onOpenSettings = { destination = MainDestination.Settings },
+                onAttachFile = { attachmentLauncher.launch(arrayOf("*/*")) },
                 modifier = modifier
             )
             MainDestination.Storage -> StorageBrowserScreen(
@@ -139,6 +160,7 @@ fun PrivateVaultApp(
                     pairingViewModel.refresh()
                     destination = MainDestination.Pairing
                 },
+                onBackupNow = onBackupNow,
                 modifier = modifier
             )
             MainDestination.Pairing -> PairingScreen(
@@ -155,18 +177,18 @@ fun PrivateVaultApp(
     update?.let { available ->
         AlertDialog(
             onDismissRequest = { onDismissUpdate(available) },
-            title = { Text("Update available") },
+            title = { Text(stringResource(R.string.update_available)) },
             text = {
-                Text("Between ${available.version} is ready. Download the APK from GitHub and install it over this app. Your local messages will stay on this phone.")
+                Text(stringResource(R.string.update_ready_body, available.version))
             },
             confirmButton = {
                 TextButton(onClick = { onDownloadUpdate(available) }) {
-                    Text("Download")
+                    Text(stringResource(R.string.download))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { onDismissUpdate(available) }) {
-                    Text("Later")
+                    Text(stringResource(R.string.later))
                 }
             }
         )

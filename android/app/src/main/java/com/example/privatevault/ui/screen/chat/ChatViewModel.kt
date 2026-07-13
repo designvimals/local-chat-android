@@ -19,4 +19,6 @@ class ChatViewModel(private val chatRepository: ChatRepository) : ViewModel() {
     fun markIncomingRead() {
         chatRepository.markIncomingReadOnPhone()
     }
+
+    fun isMine(message: Message): Boolean = chatRepository.isMine(message)
 }

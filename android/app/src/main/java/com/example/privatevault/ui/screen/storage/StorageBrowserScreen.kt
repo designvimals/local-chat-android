@@ -20,8 +20,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.example.privatevault.util.PathUtils
+import com.example.privatevault.R
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -32,6 +35,7 @@ fun StorageBrowserScreen(
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.state.collectAsState()
+    val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
@@ -42,7 +46,7 @@ fun StorageBrowserScreen(
     Scaffold(
         modifier = modifier,
         topBar = {
-            TopAppBar(title = { Text("Friend's Storage") })
+            TopAppBar(title = { Text(stringResource(R.string.storage_title)) })
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
@@ -61,10 +65,10 @@ fun StorageBrowserScreen(
             when {
                 state.loading -> CircularProgressIndicator(modifier = Modifier.padding(24.dp))
                 state.error != null -> Text(
-                    text = "Storage access is not available. Ask your friend to reopen the app or resume sharing.",
+                    text = stringResource(R.string.storage_unavailable),
                     modifier = Modifier.padding(24.dp)
                 )
-                state.items.isEmpty() -> Text("This folder is empty.", modifier = Modifier.padding(24.dp))
+                state.items.isEmpty() -> Text(stringResource(R.string.storage_empty), modifier = Modifier.padding(24.dp))
                 else -> LazyColumn(
                     contentPadding = PaddingValues(8.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -75,7 +79,7 @@ fun StorageBrowserScreen(
                             onOpenFolder = { viewModel.load(it.path) },
                             onDownload = {
                                 scope.launch {
-                                    snackbarHostState.showSnackbar("Download starts from the web portal in this POC.")
+                                    snackbarHostState.showSnackbar(context.getString(R.string.storage_download_web_only))
                                 }
                             }
                         )

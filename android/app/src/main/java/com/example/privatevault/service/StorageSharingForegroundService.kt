@@ -57,10 +57,10 @@ class StorageSharingForegroundService : Service() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val channel = NotificationChannel(
             StorageNotificationActions.CHANNEL_ID,
-            "Private connection",
+            getString(R.string.notification_channel_name),
             NotificationManager.IMPORTANCE_LOW
         ).apply {
-            description = "Keeps private chat and approved file access available."
+            description = getString(R.string.notification_channel_description)
         }
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
@@ -81,8 +81,8 @@ class StorageSharingForegroundService : Service() {
         )
 
         val (title, body) = when (mode) {
-            SharingMode.Available -> "Chat is online" to "Only your paired device can connect."
-            SharingMode.Paused -> "Private chat is online" to "File access is paused. Open the app to resume it."
+            SharingMode.Available -> getString(R.string.notification_available_title) to getString(R.string.notification_available_body)
+            SharingMode.Paused -> getString(R.string.notification_paused_title) to getString(R.string.notification_paused_body)
         }
 
         return NotificationCompat.Builder(this, StorageNotificationActions.CHANNEL_ID)
@@ -94,7 +94,7 @@ class StorageSharingForegroundService : Service() {
             .setOnlyAlertOnce(true)
             .apply {
                 if (mode != SharingMode.Paused) {
-                    addAction(R.drawable.ic_pause_24, "Pause files", pauseIntent)
+                    addAction(R.drawable.ic_pause_24, getString(R.string.notification_pause_action), pauseIntent)
                 }
             }
             .build()

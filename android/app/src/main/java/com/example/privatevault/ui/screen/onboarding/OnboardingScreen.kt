@@ -16,9 +16,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.privatevault.app.OnboardingPage
+import com.example.privatevault.R
 
 @Composable
 fun OnboardingScreen(
@@ -30,21 +32,21 @@ fun OnboardingScreen(
 ) {
     val copy = when (page) {
         OnboardingPage.Permission -> OnboardingCopy(
-            title = "Allow storage access",
-            body = "To let your friend browse and download files from this phone, allow storage access on the next screen. You can pause sharing anytime.",
-            cta = "Allow Storage Access"
+            title = stringResource(R.string.onboarding_permission_title),
+            body = stringResource(R.string.onboarding_permission_body),
+            cta = stringResource(R.string.onboarding_permission_cta)
         )
         OnboardingPage.Result -> if (permissionGranted == true) {
             OnboardingCopy(
-                title = "Storage sharing is on",
-                body = "Your friend can access shared storage from this phone whenever this app is online. You can pause sharing anytime.",
-                cta = "Start Chat"
+                title = stringResource(R.string.onboarding_enabled_title),
+                body = stringResource(R.string.onboarding_enabled_body),
+                cta = stringResource(R.string.start_chat)
             )
         } else {
             OnboardingCopy(
-                title = "Storage access is off",
-                body = "Chat will still work. File browsing can be enabled later from settings.",
-                cta = "Start Chat"
+                title = stringResource(R.string.onboarding_disabled_title),
+                body = stringResource(R.string.onboarding_disabled_body),
+                cta = stringResource(R.string.start_chat)
             )
         }
     }

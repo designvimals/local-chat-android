@@ -4,7 +4,10 @@ import type { LoginResponse } from "@private-chat-storage/api-contracts";
 import type { RelayHub } from "../services/relayHub.js";
 
 const loginSchema = z.object({
-  pairingCode: z.string().trim().regex(/^\d{6}$/)
+  pairingCode: z.string().trim().regex(/^\d{6}$/),
+  clientType: z.enum(["web", "android"]).optional().default("web"),
+  viewerDeviceId: z.string().trim().min(1).max(128).optional(),
+  deviceName: z.string().trim().min(1).max(128).optional()
 });
 
 export function createAuthRouter(relay: RelayHub): Router {
@@ -26,7 +29,17 @@ export function createAuthRouter(relay: RelayHub): Router {
       return;
     }
 
-    const claim = relay.claimPairingCode(parsed.data.pairingCode);
+    const viewerDeviceId = parsed.data.clientType === "android"
+      ? parsed.data.viewerDeviceId ?? `phone-viewer-${Date.now()}`
+      : "viewer-web";
+    const viewerName = parsed.data.clientType === "android"
+      ? parsed.data.deviceName ?? "Android phone"
+      : "Web browser";
+    const claim = relay.claimPairingCode(parsed.data.pairingCode, {
+      viewerDeviceId,
+      deviceName: viewerName,
+      clientType: parsed.data.clientType
+    });
     if (!claim) {
       const active = current && current.resetsAt > now ? current : { count: 0, resetsAt: now + 10 * 60_000 };
       attempts.set(clientId, { ...active, count: active.count + 1 });
@@ -40,7 +53,7 @@ export function createAuthRouter(relay: RelayHub): Router {
     const body: LoginResponse = {
       token: claim.accessToken,
       pairedToken: claim.accessToken,
-      viewerDeviceId: "viewer-web",
+      viewerDeviceId,
       friendName: claim.deviceName,
       endpointUrl: "relay"
     };

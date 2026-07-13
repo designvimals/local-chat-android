@@ -15,7 +15,7 @@ import kotlinx.serialization.json.Json
  * JSON message so it remains portable and human-readable without a database.
  */
 class MessageStore(
-    context: Context,
+    private val context: Context,
     private val tokenStore: TokenStore
 ) {
     private val json = Json { ignoreUnknownKeys = true }
@@ -28,7 +28,7 @@ class MessageStore(
         val message = Message(
             id = "msg_${UUID.randomUUID()}",
             senderDeviceId = tokenStore.getDeviceId(),
-            receiverDeviceId = VIEWER_DEVICE_ID,
+            receiverDeviceId = CONVERSATION_PEER_ID,
             text = text,
             timestamp = TimeUtils.nowIso(),
             status = "sent"
@@ -59,7 +59,7 @@ class MessageStore(
     fun markDeliveredTo(receiverDeviceId: String) {
         val now = TimeUtils.nowIso()
         replaceIfChanged { message ->
-            if (message.receiverDeviceId == receiverDeviceId && message.status == "sent") {
+            if (message.senderDeviceId == tokenStore.getDeviceId() && message.status == "sent") {
                 message.copy(status = "delivered", deliveredAt = now)
             } else {
                 message
@@ -70,7 +70,7 @@ class MessageStore(
     @Synchronized
     fun markReadBy(readerDeviceId: String, readAt: String = TimeUtils.nowIso()) {
         replaceIfChanged { message ->
-            if (message.receiverDeviceId == readerDeviceId && message.status != "read") {
+            if (message.senderDeviceId == tokenStore.getDeviceId() && message.status != "read") {
                 message.copy(
                     status = "read",
                     deliveredAt = message.deliveredAt ?: readAt,
@@ -83,7 +83,43 @@ class MessageStore(
     }
 
     fun markIncomingReadOnPhone() {
-        markReadBy(tokenStore.getDeviceId())
+        val now = TimeUtils.nowIso()
+        replaceIfChanged { message ->
+            if (message.senderDeviceId != tokenStore.getDeviceId() && message.status != "read") {
+                message.copy(
+                    status = "read",
+                    deliveredAt = message.deliveredAt ?: now,
+                    readAt = now
+                )
+            } else {
+                message
+            }
+        }
+    }
+
+    @Synchronized
+    fun merge(incoming: List<Message>) {
+        val merged = _messages.value.associateBy { it.id }.toMutableMap()
+        incoming.forEach { candidate ->
+            val current = merged[candidate.id]
+            merged[candidate.id] = if (current == null || statusRank(candidate.status) >= statusRank(current.status)) {
+                candidate
+            } else {
+                current
+            }
+        }
+        replace(merged.values.toList())
+    }
+
+    @Synchronized
+    fun markDelivered(messageId: String, deliveredAt: String = TimeUtils.nowIso()) {
+        replaceIfChanged { message ->
+            if (message.id == messageId && message.status != "read") {
+                message.copy(status = "delivered", deliveredAt = message.deliveredAt ?: deliveredAt)
+            } else {
+                message
+            }
+        }
     }
 
     private fun replaceIfChanged(transform: (Message) -> Message) {
@@ -118,5 +154,14 @@ class MessageStore(
 
     companion object {
         const val VIEWER_DEVICE_ID = "viewer-web"
+        const val CONVERSATION_PEER_ID = "conversation-peer"
+
+        private fun statusRank(status: String): Int = when (status) {
+            "read" -> 4
+            "delivered" -> 3
+            "sent" -> 2
+            "pending" -> 1
+            else -> 0
+        }
     }
 }

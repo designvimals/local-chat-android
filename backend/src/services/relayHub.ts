@@ -62,6 +62,12 @@ export interface PairingClaim {
   deviceName: string;
 }
 
+export interface PairingViewer {
+  viewerDeviceId: string;
+  deviceName: string;
+  clientType: "web" | "android";
+}
+
 type SocketIdentity =
   | { role: "unregistered" }
   | { role: "device"; accessToken: string }
@@ -96,7 +102,7 @@ export class RelayHub {
     socket.on("error", () => this.detach(socket));
   }
 
-  claimPairingCode(code: string): PairingClaim | null {
+  claimPairingCode(code: string, viewer: PairingViewer): PairingClaim | null {
     const device = this.devicesByCode.get(code);
     if (!device || device.socket.readyState !== WebSocket.OPEN || !device.pairingAvailable) {
       return null;
@@ -104,7 +110,12 @@ export class RelayHub {
 
     device.pairingAvailable = false;
     this.devicesByCode.delete(code);
-    this.send(device.socket, { type: "pairing.claimed" });
+    this.send(device.socket, {
+      type: "pairing.claimed",
+      viewerDeviceId: viewer.viewerDeviceId,
+      viewerName: viewer.deviceName,
+      clientType: viewer.clientType
+    });
     return { accessToken: device.accessToken, deviceName: device.deviceName };
   }
 

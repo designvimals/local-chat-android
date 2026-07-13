@@ -4,6 +4,28 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+val appStringsWorkbook = rootProject.projectDir.resolve("../outputs/app_strings/app_strings.xlsx").normalize()
+val generatedStringsXml = projectDir.resolve("src/main/res/values/strings.xml")
+val pythonCommand = if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) "python" else "python3"
+
+val syncAppStrings by tasks.registering(Exec::class) {
+    group = "build setup"
+    description = "Generate Android strings.xml from the editable Excel catalog."
+    workingDir(rootProject.projectDir.resolve(".."))
+    commandLine(
+        pythonCommand,
+        "scripts/sync_android_strings.py",
+        appStringsWorkbook.absolutePath,
+        generatedStringsXml.absolutePath
+    )
+    inputs.file(appStringsWorkbook)
+    outputs.file(generatedStringsXml)
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(syncAppStrings)
+}
+
 android {
     namespace = "com.example.privatevault"
     compileSdk = 37
@@ -12,8 +34,8 @@ android {
         applicationId = "com.example.privatevault"
         minSdk = 26
         targetSdk = 37
-        versionCode = 5
-        versionName = "0.2.3"
+        versionCode = 6
+        versionName = "0.3.0"
 
         val releaseRequested = gradle.startParameter.taskNames.any { task ->
             task.contains("Release", ignoreCase = true)
@@ -73,10 +95,12 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
     implementation("androidx.datastore:datastore-preferences:1.2.0")
+    implementation("androidx.work:work-runtime-ktx:2.11.0")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-core")
+    implementation("androidx.compose.material:material-icons-extended")
 
     implementation("io.ktor:ktor-server-core:$ktorVersion")
     implementation("io.ktor:ktor-server-cio:$ktorVersion")

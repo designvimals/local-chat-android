@@ -24,6 +24,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.yield
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -114,8 +115,10 @@ class BackendClient(
                 chatRepository.markViewerConnectedFromRelay()
             }
             "chat.sync" -> respond(session, message) {
+                val readerDeviceId = message.payload()["readerDeviceId"]?.jsonPrimitive?.contentOrNull
+                    ?: com.example.privatevault.data.local.MessageStore.VIEWER_DEVICE_ID
                 buildJsonObject {
-                    put("messages", json.encodeToJsonElement(chatRepository.messagesForViewer()))
+                    put("messages", json.encodeToJsonElement(chatRepository.messagesForViewer(readerDeviceId)))
                 }
             }
             "chat.send" -> respond(session, message) {
@@ -185,6 +188,7 @@ class BackendClient(
     private suspend fun streamFileChunks(session: DefaultClientWebSocketSession, requestId: String, file: File) {
         file.inputStream().buffered().use { input ->
             val buffer = ByteArray(48 * 1024)
+            var chunksSent = 0
             while (true) {
                 val count = input.read(buffer)
                 if (count < 0) break
@@ -196,6 +200,8 @@ class BackendClient(
                         put("data", encoded)
                     }
                 )
+                chunksSent += 1
+                if (chunksSent % 8 == 0) yield()
             }
         }
     }

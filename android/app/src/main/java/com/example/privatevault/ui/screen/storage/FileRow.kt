@@ -15,6 +15,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.privatevault.R
@@ -45,7 +46,7 @@ fun FileRow(
         },
         supportingContent = {
             Row {
-                Text(if (isFolder) "Folder" else FileUtils.displaySize(item.size))
+                Text(if (isFolder) stringResource(R.string.folder_label) else FileUtils.displaySize(item.size))
                 item.lastModified?.let {
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(it.take(10))
@@ -55,7 +56,7 @@ fun FileRow(
         trailingContent = {
             if (!isFolder) {
                 IconButton(onClick = { onDownload(item) }) {
-                    Icon(painterResource(R.drawable.ic_download_24), contentDescription = "Download ${item.name}")
+                    Icon(painterResource(R.drawable.ic_download_24), contentDescription = stringResource(R.string.download_file, item.name))
                 }
             }
         }

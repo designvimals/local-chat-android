@@ -22,6 +22,7 @@ app.use(express.json({ limit: "1mb" }));
 app.get("/health", (_request, response) => {
   response.json({
     status: "ok",
+    version: "0.3.0",
     startedAt: db.startedAt,
     storesFiles: false,
     storesMessages: false,
