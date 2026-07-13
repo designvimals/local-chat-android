@@ -3,26 +3,62 @@ import type { FileItem } from "../types/api";
 
 interface FileRowProps {
   item: FileItem;
+  busy: boolean;
   downloading: boolean;
+  selected: boolean;
+  selectionMode: boolean;
   onOpenFolder: (item: FileItem) => void;
   onDownload: (item: FileItem) => void;
+  onToggleSelected: (item: FileItem) => void;
 }
 
 const sizeFormatter = new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 1
 });
 
-export function FileRow({ item, downloading, onOpenFolder, onDownload }: FileRowProps) {
+export function FileRow({
+  item,
+  busy,
+  downloading,
+  selected,
+  selectionMode,
+  onOpenFolder,
+  onDownload,
+  onToggleSelected
+}: FileRowProps) {
   const isFolder = item.type === "folder";
   const modified = item.lastModified ? new Date(item.lastModified) : null;
+  const rowClassName = ["file-row", selectionMode ? "selecting" : "", selected ? "selected" : ""]
+    .filter(Boolean)
+    .join(" ");
 
   return (
-    <li className="file-row">
+    <li className={rowClassName}>
+      {selectionMode && !isFolder ? (
+        <label className="file-select">
+          <input
+            type="checkbox"
+            checked={selected}
+            disabled={busy}
+            onChange={() => onToggleSelected(item)}
+            aria-label={`Select ${item.name}`}
+          />
+        </label>
+      ) : selectionMode ? <span className="file-select-placeholder" aria-hidden /> : null}
       <button
         type="button"
         className="file-main"
-        onClick={() => (isFolder ? onOpenFolder(item) : onDownload(item))}
-        aria-label={isFolder ? `Open ${item.name}` : `Download ${item.name}`}
+        onClick={() => {
+          if (isFolder) onOpenFolder(item);
+          else if (selectionMode) onToggleSelected(item);
+          else onDownload(item);
+        }}
+        disabled={busy || downloading}
+        aria-label={isFolder
+          ? `Open ${item.name}`
+          : selectionMode
+            ? `${selected ? "Deselect" : "Select"} ${item.name}`
+            : `Download ${item.name}`}
       >
         <span className={isFolder ? "file-icon folder" : "file-icon"}>
           {isFolder ? <Folder aria-hidden size={20} /> : <File aria-hidden size={20} />}
@@ -35,12 +71,12 @@ export function FileRow({ item, downloading, onOpenFolder, onDownload }: FileRow
           </span>
         </span>
       </button>
-      {!isFolder ? (
+      {!isFolder && !selectionMode ? (
         <button
           type="button"
           className="icon-button download-button"
           onClick={() => onDownload(item)}
-          disabled={downloading}
+          disabled={busy || downloading}
           aria-label={`Download ${item.name}`}
         >
           <Download aria-hidden size={18} />

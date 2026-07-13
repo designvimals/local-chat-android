@@ -1,4 +1,5 @@
-import { ArrowLeft, Home, RefreshCw } from "lucide-react";
+import { zip, type AsyncZippable } from "fflate";
+import { ArrowLeft, Download, Home, ListChecks, RefreshCw, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { RelayClient } from "../lib/relay";
 import type { FileItem, StorageListResponse } from "../types/api";
@@ -10,16 +11,32 @@ interface StoragePanelProps {
   onClose: () => void;
 }
 
+interface BulkProgress {
+  completed: number;
+  total: number;
+  label: string;
+  phase: "downloading" | "packing";
+}
+
 export function StoragePanel({ relay, fullScreen = false, onClose }: StoragePanelProps) {
   const [path, setPath] = useState("/");
   const [items, setItems] = useState<FileItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [downloadingPath, setDownloadingPath] = useState<string | null>(null);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(() => new Set());
+  const [bulkProgress, setBulkProgress] = useState<BulkProgress | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const breadcrumb = useMemo(() => path === "/"
     ? ["Shared folders"]
     : ["Shared folders", ...path.split("/").filter(Boolean)], [path]);
+  const files = useMemo(() => items.filter((item) => item.type === "file"), [items]);
+  const selectedFiles = useMemo(
+    () => files.filter((item) => selectedPaths.has(item.path)),
+    [files, selectedPaths]
+  );
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -27,6 +44,10 @@ export function StoragePanel({ relay, fullScreen = false, onClose }: StoragePane
     try {
       const response = await relay.request<StorageListResponse>("storage.list", { path });
       setItems(response.items);
+      setSelectedPaths((current) => {
+        const visibleFiles = new Set(response.items.filter((item) => item.type === "file").map((item) => item.path));
+        return new Set([...current].filter((selectedPath) => visibleFiles.has(selectedPath)));
+      });
     } catch (caught) {
       setItems([]);
       setError(caught instanceof Error ? caught.message : "The phone is offline.");
@@ -37,24 +58,76 @@ export function StoragePanel({ relay, fullScreen = false, onClose }: StoragePane
 
   useEffect(() => { void refresh(); }, [refresh]);
 
+  useEffect(() => {
+    setSelectionMode(false);
+    setSelectedPaths(new Set());
+  }, [path]);
+
   async function handleDownload(item: FileItem) {
     setDownloadingPath(item.path);
     setError(null);
+    setNotice(null);
     try {
       const file = await relay.download(item.path);
-      const objectUrl = URL.createObjectURL(file.blob);
-      const anchor = document.createElement("a");
-      anchor.href = objectUrl;
-      anchor.download = file.name;
-      anchor.rel = "noopener";
-      document.body.append(anchor);
-      anchor.click();
-      anchor.remove();
-      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+      saveBlob(file.blob, file.name);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Download failed.");
     } finally {
       setDownloadingPath(null);
+    }
+  }
+
+  function toggleSelected(item: FileItem) {
+    setSelectedPaths((current) => {
+      const next = new Set(current);
+      if (next.has(item.path)) next.delete(item.path);
+      else next.add(item.path);
+      return next;
+    });
+  }
+
+  function toggleAllFiles() {
+    setSelectedPaths((current) => current.size === files.length
+      ? new Set()
+      : new Set(files.map((file) => file.path)));
+  }
+
+  function leaveSelectionMode() {
+    setSelectionMode(false);
+    setSelectedPaths(new Set());
+  }
+
+  async function handleBulkDownload() {
+    if (selectedFiles.length === 0 || bulkProgress) return;
+    setError(null);
+    setNotice(null);
+    const archive: AsyncZippable = {};
+    try {
+      for (const [index, item] of selectedFiles.entries()) {
+        setBulkProgress({
+          completed: index,
+          total: selectedFiles.length,
+          label: item.name,
+          phase: "downloading"
+        });
+        const file = await relay.download(item.path);
+        archive[uniqueArchiveName(file.name, archive)] = new Uint8Array(await file.blob.arrayBuffer());
+      }
+      setBulkProgress({
+        completed: selectedFiles.length,
+        total: selectedFiles.length,
+        label: "Creating ZIP…",
+        phase: "packing"
+      });
+      const zipped = await createZip(archive);
+      const zipName = archiveName(path);
+      saveBlob(new Blob([zipped], { type: "application/zip" }), zipName);
+      setNotice(`Downloaded ${selectedFiles.length} files as ${zipName}.`);
+      leaveSelectionMode();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Bulk download failed.");
+    } finally {
+      setBulkProgress(null);
     }
   }
 
@@ -89,7 +162,50 @@ export function StoragePanel({ relay, fullScreen = false, onClose }: StoragePane
         <button type="button" onClick={() => setPath("/")} className="soft-button">
           <Home aria-hidden size={16} /><span>Shared folders</span>
         </button>
+        <span className="storage-toolbar-spacer" />
+        {!selectionMode && files.length > 0 ? (
+          <button type="button" className="soft-button" onClick={() => setSelectionMode(true)}>
+            <ListChecks aria-hidden size={16} /><span>Select</span>
+          </button>
+        ) : null}
+        {selectionMode ? (
+          <>
+            <button type="button" className="soft-button" onClick={toggleAllFiles} disabled={bulkProgress !== null}>
+              {selectedFiles.length === files.length ? "Clear all" : "Select all"}
+            </button>
+            <button
+              type="button"
+              className="bulk-download-button"
+              onClick={() => void handleBulkDownload()}
+              disabled={selectedFiles.length === 0 || bulkProgress !== null}
+            >
+              <Download aria-hidden size={16} />
+              <span>Download {selectedFiles.length || ""}</span>
+            </button>
+            <button
+              type="button"
+              className="icon-button compact-icon-button"
+              onClick={leaveSelectionMode}
+              disabled={bulkProgress !== null}
+              aria-label="Cancel file selection"
+            >
+              <X aria-hidden size={17} />
+            </button>
+          </>
+        ) : null}
       </div>
+
+      {bulkProgress ? (
+        <div className="bulk-progress" role="status" aria-live="polite">
+          <div>
+            <strong>{bulkProgress.phase === "packing" ? "Preparing download" : `Downloading ${bulkProgress.completed + 1} of ${bulkProgress.total}`}</strong>
+            <span>{bulkProgress.label}</span>
+          </div>
+          <progress max={bulkProgress.total} value={bulkProgress.completed} />
+        </div>
+      ) : null}
+
+      {notice ? <div className="bulk-success" role="status" aria-live="polite">{notice}</div> : null}
 
       {loading ? <div className="storage-state" role="status">Loading storage…</div> : null}
       {!loading && error ? <div className="storage-state warning" role="status">{error}</div> : null}
@@ -100,13 +216,54 @@ export function StoragePanel({ relay, fullScreen = false, onClose }: StoragePane
             <FileRow
               key={item.path}
               item={item}
+              busy={bulkProgress !== null}
               downloading={downloadingPath === item.path}
+              selected={selectedPaths.has(item.path)}
+              selectionMode={selectionMode}
               onOpenFolder={(folder) => setPath(folder.path)}
               onDownload={(file) => void handleDownload(file)}
+              onToggleSelected={toggleSelected}
             />
           ))}
         </ul>
       ) : null}
     </section>
   );
+}
+
+function saveBlob(blob: Blob, name: string) {
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = name;
+  anchor.rel = "noopener";
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+}
+
+function createZip(files: AsyncZippable): Promise<Uint8Array<ArrayBuffer>> {
+  return new Promise((resolve, reject) => {
+    zip(files, { level: 0 }, (error, data) => {
+      if (error) reject(error);
+      else resolve(data);
+    });
+  });
+}
+
+function uniqueArchiveName(name: string, archive: AsyncZippable): string {
+  if (!(name in archive)) return name;
+  const extensionIndex = name.lastIndexOf(".");
+  const base = extensionIndex > 0 ? name.slice(0, extensionIndex) : name;
+  const extension = extensionIndex > 0 ? name.slice(extensionIndex) : "";
+  let copy = 2;
+  while (`${base} (${copy})${extension}` in archive) copy += 1;
+  return `${base} (${copy})${extension}`;
+}
+
+function archiveName(path: string): string {
+  const folder = path.split("/").filter(Boolean).at(-1) ?? "shared-files";
+  const safeFolder = folder.replace(/[<>:"/\\|?*\u0000-\u001F]/g, "-").trim() || "shared-files";
+  return `${safeFolder}.zip`;
 }
