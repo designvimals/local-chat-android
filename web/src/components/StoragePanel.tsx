@@ -18,6 +18,8 @@ interface BulkProgress {
   phase: "downloading" | "packing";
 }
 
+type DownloadedFile = Awaited<ReturnType<RelayClient["download"]>>;
+
 export function StoragePanel({ relay, fullScreen = false, onClose }: StoragePanelProps) {
   const [path, setPath] = useState("/");
   const [items, setItems] = useState<FileItem[]>([]);
@@ -97,32 +99,57 @@ export function StoragePanel({ relay, fullScreen = false, onClose }: StoragePane
     setSelectedPaths(new Set());
   }
 
-  async function handleBulkDownload() {
+  async function downloadSelectedFiles(onDownloaded: (file: DownloadedFile) => void | Promise<void>) {
+    const currentSelection = [...selectedFiles];
+    for (const [index, item] of currentSelection.entries()) {
+      setBulkProgress({
+        completed: index,
+        total: currentSelection.length,
+        label: item.name,
+        phase: "downloading"
+      });
+      const file = await relay.download(item.path);
+      await onDownloaded(file);
+    }
+    return currentSelection.length;
+  }
+
+  async function handleIndividualDownloads() {
+    if (selectedFiles.length === 0 || bulkProgress) return;
+    setError(null);
+    setNotice(null);
+    try {
+      const downloadedCount = await downloadSelectedFiles((file) => saveBlob(file.blob, file.name));
+      setNotice(
+        `Started ${downloadedCount} separate downloads. If only one appears, allow multiple downloads in your browser and try again.`
+      );
+      leaveSelectionMode();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Multiple download failed.");
+    } finally {
+      setBulkProgress(null);
+    }
+  }
+
+  async function handleZipDownload() {
     if (selectedFiles.length === 0 || bulkProgress) return;
     setError(null);
     setNotice(null);
     const archive: AsyncZippable = {};
     try {
-      for (const [index, item] of selectedFiles.entries()) {
-        setBulkProgress({
-          completed: index,
-          total: selectedFiles.length,
-          label: item.name,
-          phase: "downloading"
-        });
-        const file = await relay.download(item.path);
+      const downloadedCount = await downloadSelectedFiles(async (file) => {
         archive[uniqueArchiveName(file.name, archive)] = new Uint8Array(await file.blob.arrayBuffer());
-      }
+      });
       setBulkProgress({
-        completed: selectedFiles.length,
-        total: selectedFiles.length,
+        completed: downloadedCount,
+        total: downloadedCount,
         label: "Creating ZIP…",
         phase: "packing"
       });
       const zipped = await createZip(archive);
       const zipName = archiveName(path);
       saveBlob(new Blob([zipped], { type: "application/zip" }), zipName);
-      setNotice(`Downloaded ${selectedFiles.length} files as ${zipName}.`);
+      setNotice(`Downloaded ${downloadedCount} files as ${zipName}.`);
       leaveSelectionMode();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Bulk download failed.");
@@ -159,28 +186,23 @@ export function StoragePanel({ relay, fullScreen = false, onClose }: StoragePane
       </header>
 
       <div className="storage-root-action">
-        <button type="button" onClick={() => setPath("/")} className="soft-button">
-          <Home aria-hidden size={16} /><span>Shared folders</span>
-        </button>
-        <span className="storage-toolbar-spacer" />
-        {!selectionMode && files.length > 0 ? (
-          <button type="button" className="soft-button" onClick={() => setSelectionMode(true)}>
-            <ListChecks aria-hidden size={16} /><span>Select</span>
-          </button>
-        ) : null}
-        {selectionMode ? (
+        {!selectionMode ? (
           <>
+            <button type="button" onClick={() => setPath("/")} className="soft-button">
+              <Home aria-hidden size={16} /><span>Shared folders</span>
+            </button>
+            <span className="storage-toolbar-spacer" />
+            {files.length > 0 ? (
+              <button type="button" className="soft-button" onClick={() => setSelectionMode(true)}>
+                <ListChecks aria-hidden size={16} /><span>Select</span>
+              </button>
+            ) : null}
+          </>
+        ) : (
+          <div className="selection-toolbar" aria-label="Selected file actions">
+            <strong className="selection-count">{selectedFiles.length} selected</strong>
             <button type="button" className="soft-button" onClick={toggleAllFiles} disabled={bulkProgress !== null}>
               {selectedFiles.length === files.length ? "Clear all" : "Select all"}
-            </button>
-            <button
-              type="button"
-              className="bulk-download-button"
-              onClick={() => void handleBulkDownload()}
-              disabled={selectedFiles.length === 0 || bulkProgress !== null}
-            >
-              <Download aria-hidden size={16} />
-              <span>Download {selectedFiles.length || ""}</span>
             </button>
             <button
               type="button"
@@ -191,8 +213,27 @@ export function StoragePanel({ relay, fullScreen = false, onClose }: StoragePane
             >
               <X aria-hidden size={17} />
             </button>
-          </>
-        ) : null}
+            <div className="bulk-action-group">
+              <button
+                type="button"
+                className="bulk-download-button"
+                onClick={() => void handleIndividualDownloads()}
+                disabled={selectedFiles.length === 0 || bulkProgress !== null}
+              >
+                <Download aria-hidden size={16} />
+                <span>Download files</span>
+              </button>
+              <button
+                type="button"
+                className="bulk-download-button secondary"
+                onClick={() => void handleZipDownload()}
+                disabled={selectedFiles.length === 0 || bulkProgress !== null}
+              >
+                <span>Download ZIP</span>
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {bulkProgress ? (
