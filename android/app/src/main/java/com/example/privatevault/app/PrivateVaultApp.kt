@@ -17,6 +17,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -25,6 +28,7 @@ import com.example.privatevault.data.local.SettingsStore
 import com.example.privatevault.data.repository.ChatRepository
 import com.example.privatevault.data.repository.StorageRepository
 import com.example.privatevault.network.BackendRegistrationState
+import com.example.privatevault.network.AppUpdate
 import com.example.privatevault.ui.screen.chat.ChatScreen
 import com.example.privatevault.ui.screen.chat.ChatViewModel
 import com.example.privatevault.ui.screen.onboarding.OnboardingScreen
@@ -48,6 +52,9 @@ fun PrivateVaultApp(
     onStorageSharingChanged: (Boolean) -> Unit,
     onPairingCodeRotated: () -> Unit,
     onRetryRegistration: () -> Unit,
+    availableUpdate: StateFlow<AppUpdate?>,
+    onDismissUpdate: (AppUpdate) -> Unit,
+    onDownloadUpdate: (AppUpdate) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -65,6 +72,7 @@ fun PrivateVaultApp(
     val pairingCode by pairingViewModel.pairingCode.collectAsState()
     val pairingAvailable by pairingViewModel.pairingAvailable.collectAsState()
     val backendRegistration by registrationState.collectAsState()
+    val update by availableUpdate.collectAsState()
 
     val manageAllFilesLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         val granted = hasStorageAccess(context)
@@ -111,42 +119,61 @@ fun PrivateVaultApp(
             },
             modifier = modifier
         )
-        return
+    } else {
+        when (destination) {
+            MainDestination.Chat -> ChatScreen(
+                viewModel = chatViewModel,
+                pairingCode = pairingCode,
+                pairingAvailable = pairingAvailable,
+                registrationState = backendRegistration,
+                onRetryRegistration = onRetryRegistration,
+                onOpenStorage = { destination = MainDestination.Storage },
+                onOpenSettings = { destination = MainDestination.Settings },
+                modifier = modifier
+            )
+            MainDestination.Storage -> StorageBrowserScreen(
+                viewModel = storageViewModel,
+                onClose = { destination = MainDestination.Chat },
+                modifier = modifier
+            )
+            MainDestination.Settings -> SettingsScreen(
+                viewModel = settingsViewModel,
+                onBack = { destination = MainDestination.Chat },
+                onOpenPairing = {
+                    pairingViewModel.refresh()
+                    destination = MainDestination.Pairing
+                },
+                onSharingChanged = onStorageSharingChanged,
+                modifier = modifier
+            )
+            MainDestination.Pairing -> PairingScreen(
+                viewModel = pairingViewModel,
+                onBack = { destination = MainDestination.Chat },
+                onCodeRotated = onPairingCodeRotated,
+                registrationState = backendRegistration,
+                onRetryRegistration = onRetryRegistration,
+                modifier = modifier
+            )
+        }
     }
 
-    when (destination) {
-        MainDestination.Chat -> ChatScreen(
-            viewModel = chatViewModel,
-            pairingCode = pairingCode,
-            pairingAvailable = pairingAvailable,
-            registrationState = backendRegistration,
-            onRetryRegistration = onRetryRegistration,
-            onOpenStorage = { destination = MainDestination.Storage },
-            onOpenSettings = { destination = MainDestination.Settings },
-            modifier = modifier
-        )
-        MainDestination.Storage -> StorageBrowserScreen(
-            viewModel = storageViewModel,
-            onClose = { destination = MainDestination.Chat },
-            modifier = modifier
-        )
-        MainDestination.Settings -> SettingsScreen(
-            viewModel = settingsViewModel,
-            onBack = { destination = MainDestination.Chat },
-            onOpenPairing = {
-                pairingViewModel.refresh()
-                destination = MainDestination.Pairing
+    update?.let { available ->
+        AlertDialog(
+            onDismissRequest = { onDismissUpdate(available) },
+            title = { Text("Update available") },
+            text = {
+                Text("Between ${available.version} is ready. Download the APK from GitHub and install it over this app. Your local messages will stay on this phone.")
             },
-            onSharingChanged = onStorageSharingChanged,
-            modifier = modifier
-        )
-        MainDestination.Pairing -> PairingScreen(
-            viewModel = pairingViewModel,
-            onBack = { destination = MainDestination.Chat },
-            onCodeRotated = onPairingCodeRotated,
-            registrationState = backendRegistration,
-            onRetryRegistration = onRetryRegistration,
-            modifier = modifier
+            confirmButton = {
+                TextButton(onClick = { onDownloadUpdate(available) }) {
+                    Text("Download")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { onDismissUpdate(available) }) {
+                    Text("Later")
+                }
+            }
         )
     }
 }

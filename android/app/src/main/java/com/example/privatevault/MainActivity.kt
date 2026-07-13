@@ -2,6 +2,8 @@ package com.example.privatevault
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
@@ -17,6 +19,8 @@ import com.example.privatevault.data.repository.ChatRepository
 import com.example.privatevault.data.repository.DeviceRepository
 import com.example.privatevault.data.repository.StorageRepository
 import com.example.privatevault.network.BackendClient
+import com.example.privatevault.network.AppUpdate
+import com.example.privatevault.network.GithubUpdateChecker
 import com.example.privatevault.server.LocalServerManager
 import com.example.privatevault.server.PathResolver
 import com.example.privatevault.service.StorageSessionNotifier
@@ -26,6 +30,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -39,6 +44,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var storageRepository: StorageRepository
     private lateinit var notifier: StorageSessionNotifier
     private var registrationJob: Job? = null
+    private val availableUpdate = MutableStateFlow<AppUpdate?>(null)
+    private var dismissedUpdateVersion: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -64,8 +71,7 @@ class MainActivity : ComponentActivity() {
             deviceRepository = deviceRepository,
             chatRepository = chatRepository,
             pathResolver = pathResolver,
-            settingsStore = settingsStore,
-            notifier = notifier
+            settingsStore = settingsStore
         )
 
         setContent {
@@ -78,7 +84,10 @@ class MainActivity : ComponentActivity() {
                     registrationState = backendClient.registrationState,
                     onStorageSharingChanged = ::applySharingState,
                     onPairingCodeRotated = ::restartRelay,
-                    onRetryRegistration = ::restartRelay
+                    onRetryRegistration = ::restartRelay,
+                    availableUpdate = availableUpdate,
+                    onDismissUpdate = ::dismissUpdate,
+                    onDownloadUpdate = ::downloadUpdate
                 )
             }
         }
@@ -92,6 +101,10 @@ class MainActivity : ComponentActivity() {
                 val shouldShare = settingsStore.storageSharingEnabled.first() && hasStorageAccess(this@MainActivity)
                 applySharingState(shouldShare)
             }
+        }
+        lifecycleScope.launch {
+            val update = GithubUpdateChecker.findAvailableUpdate()
+            availableUpdate.value = update?.takeUnless { it.version == dismissedUpdateVersion }
         }
     }
 
@@ -123,6 +136,18 @@ class MainActivity : ComponentActivity() {
                 backendClient.connectRelay(storageSharingEnabled = storageAvailable)
                 delay(2_000)
             }
+        }
+    }
+
+    private fun dismissUpdate(update: AppUpdate) {
+        dismissedUpdateVersion = update.version
+        availableUpdate.value = null
+    }
+
+    private fun downloadUpdate(update: AppUpdate) {
+        dismissUpdate(update)
+        runCatching {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(update.downloadUrl)))
         }
     }
 

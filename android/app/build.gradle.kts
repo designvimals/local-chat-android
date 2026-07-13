@@ -12,8 +12,8 @@ android {
         applicationId = "com.example.privatevault"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
 
         val backendUrl = providers.gradleProperty("pocBackendUrl").getOrElse("http://10.0.2.2:8787")
         val registrationKey = providers.gradleProperty("pocRegistrationKey").getOrElse("local-dev-registration-key-change-me")
@@ -25,6 +25,19 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    val releaseKeystorePath = providers.environmentVariable("ANDROID_KEYSTORE_PATH").orNull
+    if (!releaseKeystorePath.isNullOrBlank()) {
+        signingConfigs.create("githubRelease") {
+            storeFile = file(releaseKeystorePath)
+            storePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").get()
+            keyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").get()
+            keyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD").get()
+        }
+        buildTypes.getByName("release") {
+            signingConfig = signingConfigs.getByName("githubRelease")
+        }
     }
 
     compileOptions {

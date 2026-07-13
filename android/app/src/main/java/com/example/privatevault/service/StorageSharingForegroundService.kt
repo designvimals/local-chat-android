@@ -29,7 +29,6 @@ class StorageSharingForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val mode = when (intent?.action) {
-            StorageNotificationActions.ACTION_ACTIVE -> SharingMode.Active
             StorageNotificationActions.ACTION_PAUSE -> {
                 serviceScope.launch {
                     SettingsStore(applicationContext).setStorageSharingEnabled(false)
@@ -82,7 +81,6 @@ class StorageSharingForegroundService : Service() {
         )
 
         val (title, body) = when (mode) {
-            SharingMode.Active -> "Shared files are being accessed" to "Your paired device is browsing or downloading now."
             SharingMode.Available -> "Private chat and files are online" to "Only your paired device can connect."
             SharingMode.Paused -> "Private chat is online" to "File access is paused. Open the app to resume it."
         }
@@ -102,7 +100,7 @@ class StorageSharingForegroundService : Service() {
             .build()
     }
 
-    private enum class SharingMode { Available, Active, Paused }
+    private enum class SharingMode { Available, Paused }
 }
 
 class StorageSessionNotifier(private val context: Context) {
@@ -111,13 +109,6 @@ class StorageSessionNotifier(private val context: Context) {
             Intent(context, StorageSharingForegroundService::class.java)
                 .setAction(StorageNotificationActions.ACTION_AVAILABLE)
                 .putExtra(StorageNotificationActions.EXTRA_STORAGE_ENABLED, storageSharingEnabled)
-        )
-    }
-
-    fun markActive() {
-        start(
-            Intent(context, StorageSharingForegroundService::class.java)
-                .setAction(StorageNotificationActions.ACTION_ACTIVE)
         )
     }
 
