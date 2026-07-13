@@ -96,10 +96,13 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         lifecycleScope.launch {
-            settingsStore.setStoragePermissionGranted(hasStorageAccess(this@MainActivity))
+            val storageAccessGranted = hasStorageAccess(this@MainActivity)
+            settingsStore.setStoragePermissionGranted(storageAccessGranted)
             if (settingsStore.onboardingComplete.first()) {
-                val shouldShare = settingsStore.storageSharingEnabled.first() && hasStorageAccess(this@MainActivity)
-                applySharingState(shouldShare)
+                if (storageAccessGranted) {
+                    settingsStore.setStorageSharingEnabled(true)
+                }
+                applySharingState(storageAccessGranted)
             }
         }
         lifecycleScope.launch {

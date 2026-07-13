@@ -36,7 +36,6 @@ import com.example.privatevault.ui.screen.onboarding.OnboardingViewModel
 import com.example.privatevault.ui.screen.pairing.PairingScreen
 import com.example.privatevault.ui.screen.pairing.PairingViewModel
 import com.example.privatevault.ui.screen.settings.SettingsScreen
-import com.example.privatevault.ui.screen.settings.SettingsViewModel
 import com.example.privatevault.ui.screen.storage.StorageBrowserScreen
 import com.example.privatevault.ui.screen.storage.StorageBrowserViewModel
 import kotlinx.coroutines.launch
@@ -67,7 +66,6 @@ fun PrivateVaultApp(
     val onboardingViewModel = pocViewModel { OnboardingViewModel(settingsStore) }
     val chatViewModel = pocViewModel { ChatViewModel(chatRepository) }
     val storageViewModel = pocViewModel { StorageBrowserViewModel(storageRepository) }
-    val settingsViewModel = pocViewModel { SettingsViewModel(settingsStore) }
     val pairingViewModel = pocViewModel(pairingViewModelFactory)
     val pairingCode by pairingViewModel.pairingCode.collectAsState()
     val pairingAvailable by pairingViewModel.pairingAvailable.collectAsState()
@@ -127,7 +125,6 @@ fun PrivateVaultApp(
                 pairingAvailable = pairingAvailable,
                 registrationState = backendRegistration,
                 onRetryRegistration = onRetryRegistration,
-                onOpenStorage = { destination = MainDestination.Storage },
                 onOpenSettings = { destination = MainDestination.Settings },
                 modifier = modifier
             )
@@ -137,13 +134,11 @@ fun PrivateVaultApp(
                 modifier = modifier
             )
             MainDestination.Settings -> SettingsScreen(
-                viewModel = settingsViewModel,
                 onBack = { destination = MainDestination.Chat },
                 onOpenPairing = {
                     pairingViewModel.refresh()
                     destination = MainDestination.Pairing
                 },
-                onSharingChanged = onStorageSharingChanged,
                 modifier = modifier
             )
             MainDestination.Pairing -> PairingScreen(

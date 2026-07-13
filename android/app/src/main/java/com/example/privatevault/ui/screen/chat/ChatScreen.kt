@@ -40,12 +40,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.example.privatevault.R
 import com.example.privatevault.network.BackendRegistrationState
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -56,7 +54,6 @@ fun ChatScreen(
     pairingAvailable: Boolean,
     registrationState: BackendRegistrationState,
     onRetryRegistration: () -> Unit,
-    onOpenStorage: () -> Unit,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -120,20 +117,14 @@ fun ChatScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = onOpenStorage) {
-                        Icon(painterResource(R.drawable.ic_folder_24), contentDescription = "Browse local storage")
-                    }
                     IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Default.Settings, contentDescription = "Chat and storage settings")
+                        Icon(Icons.Default.Settings, contentDescription = "Settings")
                     }
                 }
             )
         },
         bottomBar = {
-            MessageInputBar(
-                onSend = viewModel::send,
-                onOpenStorage = onOpenStorage
-            )
+            MessageInputBar(onSend = viewModel::send)
         }
     ) { padding ->
         LazyColumn(

@@ -16,14 +16,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
-import com.example.privatevault.R
 
 @Composable
 fun MessageInputBar(
     onSend: (String) -> Unit,
-    onOpenStorage: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var text by remember { mutableStateOf("") }
@@ -35,9 +32,6 @@ fun MessageInputBar(
             .padding(horizontal = 8.dp, vertical = 10.dp),
         verticalAlignment = Alignment.Bottom
     ) {
-        IconButton(onClick = onOpenStorage) {
-            Icon(painterResource(R.drawable.ic_folder_24), contentDescription = "Open shared files")
-        }
         OutlinedTextField(
             modifier = Modifier
                 .weight(1f)
