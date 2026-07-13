@@ -81,7 +81,7 @@ class StorageSharingForegroundService : Service() {
         )
 
         val (title, body) = when (mode) {
-            SharingMode.Available -> "Private chat and files are online" to "Only your paired device can connect."
+            SharingMode.Available -> "Chat is online" to "Only your paired device can connect."
             SharingMode.Paused -> "Private chat is online" to "File access is paused. Open the app to resume it."
         }
 
