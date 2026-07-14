@@ -7,5 +7,7 @@ data class ChatAttachment(
     val id: String,
     val name: String,
     val mimeType: String,
-    val size: Long
+    val size: Long,
+    val width: Int? = null,
+    val height: Int? = null
 )

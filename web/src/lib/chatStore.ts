@@ -1,5 +1,15 @@
 import type { AuthSession, Message } from "../types/api";
 
+export function canonicalAttachments(message: Message) {
+  const seen = new Set<string>();
+  return [...(message.attachments ?? []), ...(message.attachment ? [message.attachment] : [])]
+    .filter((attachment) => {
+      if (seen.has(attachment.id)) return false;
+      seen.add(attachment.id);
+      return true;
+    });
+}
+
 function storageKey(session: AuthSession): string {
   return `private-chat-messages:${session.pairedToken.slice(-12)}`;
 }
@@ -9,22 +19,111 @@ export function loadLocalMessages(session: AuthSession): Message[] {
   if (!raw) return [];
   try {
     const messages = JSON.parse(raw) as Message[];
-    return Array.isArray(messages) ? messages.sort(compareMessages) : [];
+    return Array.isArray(messages) ? messages.map(normalizeMessage).sort(compareMessages) : [];
   } catch {
     return [];
   }
 }
 
 export function saveLocalMessages(session: AuthSession, messages: Message[]): void {
-  window.localStorage.setItem(storageKey(session), JSON.stringify(messages.sort(compareMessages)));
+  window.localStorage.setItem(storageKey(session), JSON.stringify(messages.map(normalizeMessage).sort(compareMessages)));
 }
 
 export function mergeMessages(local: Message[], remote: Message[]): Message[] {
-  const merged = new Map(local.map((message) => [message.id, message]));
-  for (const message of remote) {
-    merged.set(message.id, message);
+  const merged = new Map(local.map((message) => {
+    const normalized = normalizeMessage(message);
+    return [normalized.id, normalized] as const;
+  }));
+  for (const rawMessage of remote) {
+    const message = normalizeMessage(rawMessage);
+    const current = merged.get(message.id);
+    merged.set(message.id, current ? mergeMessage(current, message) : message);
   }
   return [...merged.values()].sort(compareMessages);
+}
+
+function mergeMessage(current: Message, candidate: Message): Message {
+  const candidateUpdatedAt = candidate.updatedAt ?? candidate.timestamp;
+  const currentUpdatedAt = current.updatedAt ?? current.timestamp;
+  const latest = candidateUpdatedAt > currentUpdatedAt
+    ? candidate
+    : candidateUpdatedAt < currentUpdatedAt
+      ? current
+      : mutationKey(candidate) >= mutationKey(current) ? candidate : current;
+  const deletedAt = maxTimestamp(current.deletedAt, candidate.deletedAt);
+  return normalizeMessage({
+    ...latest,
+    status: statusRank(candidate.status) > statusRank(current.status) ? candidate.status : current.status,
+    deliveredAt: maxTimestamp(current.deliveredAt, candidate.deliveredAt),
+    readAt: maxTimestamp(current.readAt, candidate.readAt),
+    deletedAt,
+    deletedForDeviceIds: [...new Set([
+      ...(current.deletedForDeviceIds ?? []),
+      ...(candidate.deletedForDeviceIds ?? [])
+    ])],
+    updatedAt: maxTimestamp(latest.updatedAt ?? latest.timestamp, deletedAt) ?? latest.timestamp
+  });
+}
+
+export function normalizeMessage(message: Message): Message {
+  const updatedAt = message.updatedAt || message.timestamp;
+  const attachments = canonicalAttachments(message);
+  const normalized: Message = {
+    ...message,
+    attachment: attachments[0],
+    attachments,
+    reactions: message.reactions ?? [],
+    replyToMessageId: message.replyToMessageId ?? null,
+    editedAt: message.editedAt ?? null,
+    deletedAt: message.deletedAt ?? null,
+    deletedForDeviceIds: message.deletedForDeviceIds ?? [],
+    updatedAt
+  };
+  if (!normalized.deletedAt) return normalized;
+  return {
+    ...normalized,
+    text: "",
+    attachment: undefined,
+    attachments: [],
+    emphasisLevel: 0,
+    reactions: [],
+    replyToMessageId: null,
+    editedAt: null,
+    updatedAt: maxTimestamp(updatedAt, normalized.deletedAt) ?? updatedAt
+  };
+}
+
+function maxTimestamp(first?: string | null, second?: string | null): string | undefined {
+  if (!first) return second ?? undefined;
+  if (!second) return first;
+  return first >= second ? first : second;
+}
+
+function statusRank(status: Message["status"]): number {
+  if (status === "read") return 4;
+  if (status === "delivered") return 3;
+  if (status === "sent") return 2;
+  if (status === "pending") return 1;
+  return 0;
+}
+
+function mutationKey(message: Message): string {
+  const attachment = canonicalAttachments(message)
+    .map((item) => `${item.id}:${item.name}:${item.mimeType}:${item.size}:${item.width ?? ""}x${item.height ?? ""}`)
+    .join(";");
+  const reactions = [...(message.reactions ?? [])]
+    .sort((left, right) => left.emoji < right.emoji ? -1 : left.emoji > right.emoji ? 1 : 0)
+    .map((reaction) => `${reaction.emoji}:${[...reaction.reactorDeviceIds].sort().join(",")}`)
+    .join(";");
+  return [
+    message.deletedAt ?? "",
+    message.text,
+    attachment,
+    message.emphasisLevel ?? 0,
+    message.replyToMessageId ?? "",
+    message.editedAt ?? "",
+    reactions
+  ].join("|");
 }
 
 function compareMessages(left: Message, right: Message): number {

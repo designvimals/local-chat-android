@@ -73,11 +73,9 @@ fun PrivateVaultApp(
     val context = LocalContext.current
     val attachmentFailedMessage = stringResource(R.string.attachment_failed)
     val scope = rememberCoroutineScope()
-    var pendingAttachment by remember { mutableStateOf<ChatAttachment?>(null) }
-    val onboardingComplete by settingsStore.onboardingComplete.collectAsState(initial = false)
+    var pendingAttachments by remember { mutableStateOf<List<ChatAttachment>>(emptyList()) }
+    val onboardingComplete: Boolean? by settingsStore.onboardingComplete.collectAsState(initial = null)
     var destination by rememberSaveable { mutableStateOf(MainDestination.Chat) }
-    var onboardingPage by rememberSaveable { mutableStateOf(OnboardingPage.Permission) }
-    var permissionGranted by rememberSaveable { mutableStateOf<Boolean?>(null) }
 
     val onboardingViewModel = pocViewModel { OnboardingViewModel(settingsStore) }
     val chatViewModel = pocViewModel { ChatViewModel(chatRepository) }
@@ -87,45 +85,53 @@ fun PrivateVaultApp(
     val pairingAvailable by pairingViewModel.pairingAvailable.collectAsState()
     val backendRegistration by registrationState.collectAsState()
     val update by availableUpdate.collectAsState()
+    val completeOnboarding: (Boolean) -> Unit = { granted ->
+        onboardingViewModel.complete(granted) {
+            onStorageSharingChanged(granted)
+            destination = MainDestination.Chat
+        }
+    }
 
     val manageAllFilesLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         val granted = hasStorageAccess(context)
-        permissionGranted = granted
-        onboardingPage = OnboardingPage.Result
-        scope.launch { settingsStore.setStoragePermissionGranted(granted) }
+        completeOnboarding(granted)
     }
     val legacyStorageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        permissionGranted = granted
-        onboardingPage = OnboardingPage.Result
-        scope.launch { settingsStore.setStoragePermissionGranted(granted) }
+        completeOnboarding(granted)
     }
     val notificationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
-    val attachmentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
+    val attachmentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) {
             scope.launch {
-                onAttachFile(uri)
-                    .onSuccess { pendingAttachment = it }
-                    .onFailure { error ->
-                        Toast.makeText(
-                            context,
-                            error.message ?: attachmentFailedMessage,
-                            Toast.LENGTH_LONG
-                        ).show()
-                    }
+                val attached = mutableListOf<ChatAttachment>()
+                var firstError: Throwable? = null
+                uris.forEach { uri ->
+                    onAttachFile(uri)
+                        .onSuccess(attached::add)
+                        .onFailure { if (firstError == null) firstError = it }
+                }
+                if (attached.isNotEmpty()) {
+                    pendingAttachments = (pendingAttachments + attached).distinctBy(ChatAttachment::id)
+                }
+                firstError?.let { error ->
+                    Toast.makeText(
+                        context,
+                        error.message ?: attachmentFailedMessage,
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
             }
         }
     }
 
     LaunchedEffect(onboardingComplete) {
-        if (onboardingComplete && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        if (onboardingComplete == true && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
 
-    if (!onboardingComplete) {
+    if (onboardingComplete == false) {
         OnboardingScreen(
-            page = onboardingPage,
-            permissionGranted = permissionGranted,
             onRequestStorage = {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     val intent = Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
@@ -139,16 +145,9 @@ fun PrivateVaultApp(
                     legacyStorageLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
                 }
             },
-            onStartChat = {
-                val granted = permissionGranted == true
-                onboardingViewModel.complete(granted) {
-                    onStorageSharingChanged(granted)
-                    destination = MainDestination.Chat
-                }
-            },
             modifier = modifier
         )
-    } else {
+    } else if (onboardingComplete == true) {
         when (destination) {
             MainDestination.Chat -> ChatScreen(
                 viewModel = chatViewModel,
@@ -157,12 +156,15 @@ fun PrivateVaultApp(
                 registrationState = backendRegistration,
                 onRetryRegistration = onRetryRegistration,
                 onOpenSettings = { destination = MainDestination.Settings },
-                onAttachFile = { attachmentLauncher.launch(arrayOf("*/*")) },
-                pendingAttachment = pendingAttachment,
-                onRemovePendingAttachment = { pendingAttachment = null },
-                onSendAttachment = { attachment, caption ->
-                    chatViewModel.sendAttachment(attachment, caption)
-                    pendingAttachment = null
+                onAttachFiles = { attachmentLauncher.launch(arrayOf("*/*")) },
+                pendingAttachments = pendingAttachments,
+                onRemovePendingAttachment = { attachmentId ->
+                    pendingAttachments = pendingAttachments.filterNot { it.id == attachmentId }
+                },
+                onSendAttachments = { attachments, caption, replyToMessageId ->
+                    chatViewModel.sendAttachments(attachments, caption, replyToMessageId).also { result ->
+                        if (result.isSuccess) pendingAttachments = emptyList()
+                    }
                 },
                 attachmentManager = attachmentManager,
                 modifier = modifier

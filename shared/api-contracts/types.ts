@@ -24,6 +24,19 @@ export interface Message {
   deliveredAt?: string | null;
   readAt?: string | null;
   attachment?: ChatAttachment | null;
+  attachments?: ChatAttachment[];
+  emphasisLevel?: number;
+  reactions?: MessageReaction[];
+  replyToMessageId?: string | null;
+  editedAt?: string | null;
+  deletedAt?: string | null;
+  deletedForDeviceIds?: string[];
+  updatedAt?: string;
+}
+
+export interface MessageReaction {
+  emoji: string;
+  reactorDeviceIds: string[];
 }
 
 export interface ChatAttachment {
@@ -31,6 +44,8 @@ export interface ChatAttachment {
   name: string;
   mimeType: string;
   size: number;
+  width?: number;
+  height?: number;
 }
 
 export interface FileItem {

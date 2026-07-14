@@ -1,6 +1,8 @@
-import { Check, CheckCheck, CircleAlert, Clock3, Download, File, LoaderCircle } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Check, CheckCheck, CircleAlert, Clock3, Download, File, LoaderCircle, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatAttachment, Message } from "../../../shared/api-contracts/types";
+import { singleEmojiOrNull } from "../lib/messagePresentation";
+import { canonicalAttachments } from "../lib/chatStore";
 import { RelayClient } from "../lib/relay";
 
 interface MessageListProps {
@@ -17,12 +19,19 @@ const timeFormatter = new Intl.DateTimeFormat(undefined, {
 
 export function MessageList({ messages, viewerDeviceId, relay, remoteTyping }: MessageListProps) {
   const endRef = useRef<HTMLDivElement>(null);
+  const rowRefs = useRef(new Map<string, HTMLElement>());
+  const [highlightedId, setHighlightedId] = useState<string | null>(null);
+  const visibleMessages = useMemo(
+    () => messages.filter((message) => !(message.deletedForDeviceIds ?? []).includes(viewerDeviceId)),
+    [messages, viewerDeviceId]
+  );
+  const messageById = useMemo(() => new Map(messages.map((message) => [message.id, message])), [messages]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end" });
   }, [messages.length]);
 
-  if (messages.length === 0) {
+  if (visibleMessages.length === 0) {
     return (
       <div className="empty-conversation" role="status">
         <span className="empty-orbit" aria-hidden>↗</span>
@@ -34,17 +43,62 @@ export function MessageList({ messages, viewerDeviceId, relay, remoteTyping }: M
 
   return (
     <ol className="message-list" aria-label="Messages">
-      {messages.map((message) => {
+      {visibleMessages.map((message) => {
         const mine = message.senderDeviceId === viewerDeviceId;
+        const attachments = canonicalAttachments(message);
+        const emoji = !message.deletedAt && attachments.length === 0 ? singleEmojiOrNull(message.text) : null;
+        const rawReplyTarget = message.replyToMessageId ? messageById.get(message.replyToMessageId) : undefined;
+        const replyTarget = rawReplyTarget && !(rawReplyTarget.deletedForDeviceIds ?? []).includes(viewerDeviceId)
+          ? rawReplyTarget
+          : undefined;
         return (
-          <li className={mine ? "message-row mine" : "message-row"} key={message.id}>
-            <article className="message-bubble">
-              {message.attachment ? <AttachmentPreview attachment={message.attachment} relay={relay} /> : null}
-              {message.text ? <p>{message.text}</p> : null}
+          <li
+            className={`${mine ? "message-row mine" : "message-row"}${highlightedId === message.id ? " highlighted" : ""}`}
+            key={message.id}
+            ref={(element) => {
+              if (element) rowRefs.current.set(message.id, element);
+              else rowRefs.current.delete(message.id);
+            }}
+          >
+            <article className={`message-bubble${emoji ? " emoji-only" : ""}${message.deletedAt ? " deleted" : ""}`}>
+              {message.replyToMessageId ? (
+                <button
+                  type="button"
+                  className="reply-quote"
+                  onClick={() => {
+                    const target = rowRefs.current.get(message.replyToMessageId!);
+                    if (!target) return;
+                    target.scrollIntoView({ block: "center", behavior: "smooth" });
+                    setHighlightedId(message.replyToMessageId!);
+                    window.setTimeout(() => setHighlightedId(null), 900);
+                  }}
+                >
+                  <strong>{replyTarget?.senderDeviceId === viewerDeviceId ? "You" : "Phone"}</strong>
+                  <span>{replySummary(replyTarget)}</span>
+                </button>
+              ) : null}
+              {message.deletedAt ? (
+                <p className="deleted-copy"><Trash2 aria-hidden size={15} />This message was deleted.</p>
+              ) : (
+                <>
+                  {attachments.length ? <AttachmentGroup attachments={attachments} relay={relay} /> : null}
+                  {emoji ? <p className="single-emoji">{emoji}</p> : message.text ? <p>{message.text}</p> : null}
+                </>
+              )}
               <footer>
+                {message.editedAt ? <span>edited</span> : null}
                 <time dateTime={message.timestamp}>{timeFormatter.format(new Date(message.timestamp))}</time>
                 {mine ? <MessageReceipt status={message.status} /> : null}
               </footer>
+              {!message.deletedAt && message.reactions?.length ? (
+                <div className="reaction-list" aria-label="Reactions">
+                  {message.reactions.map((reaction) => (
+                    <span key={reaction.emoji} aria-label={`${reaction.emoji}, ${reaction.reactorDeviceIds.length} reactions`}>
+                      {reaction.emoji} {reaction.reactorDeviceIds.length}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
             </article>
           </li>
         );
@@ -56,6 +110,33 @@ export function MessageList({ messages, viewerDeviceId, relay, remoteTyping }: M
       ) : null}
       <li className="scroll-anchor" aria-hidden><div ref={endRef} /></li>
     </ol>
+  );
+}
+
+function replySummary(message: Message | undefined): string {
+  if (!message) return "Original message unavailable";
+  if (message.deletedAt) return "This message was deleted.";
+  if (message.text.trim()) return message.text;
+  const attachments = canonicalAttachments(message);
+  if (attachments.length === 1) return attachments[0]!.name;
+  const imageCount = attachments.filter((attachment) => attachment.mimeType.startsWith("image/")).length;
+  if (imageCount === attachments.length) return `${imageCount} photos`;
+  if (attachments.length > 1) return `${attachments.length} attachments`;
+  return "Original message unavailable";
+}
+
+function AttachmentGroup({ attachments, relay }: { attachments: ChatAttachment[]; relay: RelayClient }) {
+  const images = attachments.filter((attachment) => attachment.mimeType.startsWith("image/"));
+  const files = attachments.filter((attachment) => !attachment.mimeType.startsWith("image/"));
+  return (
+    <div className="attachment-group">
+      {images.length ? (
+        <div className={`attachment-gallery${images.length > 1 ? " multiple" : ""}`} aria-label={`${images.length} attached ${images.length === 1 ? "image" : "images"}`}>
+          {images.map((attachment) => <AttachmentPreview key={attachment.id} attachment={attachment} relay={relay} />)}
+        </div>
+      ) : null}
+      {files.map((attachment) => <AttachmentPreview key={attachment.id} attachment={attachment} relay={relay} />)}
+    </div>
   );
 }
 
@@ -112,7 +193,12 @@ function AttachmentPreview({ attachment, relay }: { attachment: ChatAttachment; 
           <File aria-hidden size={18} /><span>{attachment.name}<small>{error ?? "Original file unavailable."} Select to retry.</small></span>
         </button>
       ) : attachment.mimeType.startsWith("image/") ? (
-        <img src={file.url} alt={attachment.name} />
+        <img
+          src={file.url}
+          alt={attachment.name}
+          width={attachment.width}
+          height={attachment.height}
+        />
       ) : (
         <div className="attachment-file"><File aria-hidden size={22} /><span>{attachment.name}</span></div>
       )}

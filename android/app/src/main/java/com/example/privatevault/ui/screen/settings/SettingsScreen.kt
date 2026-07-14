@@ -41,6 +41,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.privatevault.BuildConfig
 import com.example.privatevault.R
 import com.example.privatevault.data.local.ThemePreference
 import com.example.privatevault.ui.lock.DebugKeySetupDialog
@@ -221,6 +222,23 @@ fun SettingsScreen(
                     backupStatus?.let { status ->
                         Text(status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                     }
+                }
+            }
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        stringResource(R.string.app_version),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        BuildConfig.VERSION_NAME,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }

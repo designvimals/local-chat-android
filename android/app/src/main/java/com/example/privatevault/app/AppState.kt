@@ -6,8 +6,3 @@ enum class MainDestination {
     Settings,
     Pairing
 }
-
-enum class OnboardingPage {
-    Permission,
-    Result
-}

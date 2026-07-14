@@ -1,12 +1,21 @@
 package com.example.privatevault.ui.lock
 
+import android.animation.ValueAnimator
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,19 +31,32 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.toPath
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Matrix
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
@@ -45,12 +67,16 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.privatevault.R
 import com.example.privatevault.security.AppLockManager
 import com.example.privatevault.security.AppLockState
+import androidx.graphics.shapes.Morph
+import androidx.graphics.shapes.RoundedPolygon
 
 @Composable
 fun AppLockGate(
@@ -209,12 +235,19 @@ private fun PinKeypadScreen(
     onDismiss: (() -> Unit)? = null
 ) {
     val haptics = LocalHapticFeedback.current
+    val animationsEnabled = remember { ValueAnimator.areAnimatorsEnabled() }
+    val shapePairs = remember { randomizedPinShapePairs() }
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background,
         contentColor = MaterialTheme.colorScheme.onBackground
     ) {
-        Box(Modifier.fillMaxSize().safeDrawingPadding().navigationBarsPadding()) {
+        BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding().navigationBarsPadding()) {
+            val horizontalPadding = 28.dp
+            val widthBasedSize = ((maxWidth - horizontalPadding * 2 - 24.dp) / 3)
+            val heightBasedSize = ((maxHeight - 300.dp - 36.dp) / 4)
+            val keySize = minOf(widthBasedSize, heightBasedSize, 104.dp).coerceAtLeast(64.dp)
+            val compact = maxHeight < 590.dp || widthBasedSize < 64.dp
             onDismiss?.let { dismiss ->
                 IconButton(
                     onClick = dismiss,
@@ -222,55 +255,69 @@ private fun PinKeypadScreen(
                 ) { Icon(Icons.Default.Close, stringResource(R.string.close)) }
             }
             Column(
-                modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = horizontalPadding)
+                    .then(if (compact) Modifier.verticalScroll(rememberScrollState()) else Modifier),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = if (compact) Arrangement.spacedBy(20.dp) else Arrangement.SpaceEvenly
             ) {
-                Spacer(Modifier.weight(0.30f))
-                Text(
-                    title,
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    textAlign = TextAlign.Center
-                )
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    body,
-                    modifier = Modifier.widthIn(max = 390.dp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodyMedium,
-                    textAlign = TextAlign.Center
-                )
-                Spacer(Modifier.height(28.dp))
-                AnimatedContent(
-                    targetState = stageLabel,
-                    transitionSpec = {
-                        androidx.compose.animation.fadeIn() togetherWith androidx.compose.animation.fadeOut()
-                    },
-                    label = "debug-key-stage"
-                ) { label ->
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.padding(top = if (compact) 20.dp else 0.dp)
+                ) {
                     Text(
-                        label,
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary
+                        title,
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center
+                    )
+                    Text(
+                        body,
+                        modifier = Modifier.widthIn(max = 390.dp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center
                     )
                 }
-                Spacer(Modifier.height(18.dp))
-                PinDots(filledCount = digits.length)
-                Box(
-                    Modifier.height(52.dp).fillMaxWidth(),
-                    contentAlignment = Alignment.Center
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    error?.let {
+                    AnimatedContent(
+                        targetState = stageLabel,
+                        transitionSpec = {
+                            androidx.compose.animation.fadeIn() togetherWith androidx.compose.animation.fadeOut()
+                        },
+                        label = "debug-key-stage"
+                    ) { label ->
                         Text(
-                            it,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                            label,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary
                         )
                     }
+                    PinDots(
+                        filledCount = digits.length,
+                        shapePairs = shapePairs,
+                        animationsEnabled = animationsEnabled
+                    )
+                    Box(
+                        Modifier.height(42.dp).fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        error?.let {
+                            Text(
+                                it,
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                            )
+                        }
+                    }
                 }
-                Spacer(Modifier.height(6.dp))
                 NumericKeypad(
                     onDigit = {
                         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -279,27 +326,40 @@ private fun PinKeypadScreen(
                     onDelete = onDelete,
                     onSubmit = onSubmit,
                     submitDescription = submitDescription,
-                    submitEnabled = digits.length == DEBUG_KEY_LENGTH
+                    submitEnabled = digits.length == DEBUG_KEY_LENGTH,
+                    keySize = keySize
                 )
-                Spacer(Modifier.weight(0.24f))
+                if (compact) Spacer(Modifier.height(20.dp))
             }
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun PinDots(filledCount: Int) {
+private fun PinDots(
+    filledCount: Int,
+    shapePairs: List<PinShapePair>,
+    animationsEnabled: Boolean
+) {
     Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
         repeat(DEBUG_KEY_LENGTH) { index ->
+            val filled = index < filledCount
+            val progress by animateFloatAsState(
+                targetValue = if (filled) 1f else 0f,
+                animationSpec = if (animationsEnabled) tween(180) else snap(),
+                label = "debug-key-shape-$index"
+            )
+            val indicatorSize by animateDpAsState(
+                targetValue = if (filled) 22.dp else 18.dp,
+                animationSpec = if (animationsEnabled) tween(180) else snap(),
+                label = "debug-key-size-$index"
+            )
             Surface(
-                modifier = Modifier.size(if (index < filledCount) 14.dp else 12.dp),
-                shape = CircleShape,
-                color = if (index < filledCount) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.surfaceContainerHighest,
-                border = if (index < filledCount) null else androidx.compose.foundation.BorderStroke(
-                    1.dp,
-                    MaterialTheme.colorScheme.outline
-                )
+                modifier = Modifier.size(indicatorSize),
+                shape = MorphProgressShape(shapePairs[index].morph, progress),
+                color = if (filled) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.surfaceContainerHighest
             ) {}
         }
     }
@@ -311,24 +371,24 @@ private fun NumericKeypad(
     onDelete: () -> Unit,
     onSubmit: () -> Unit,
     submitDescription: String,
-    submitEnabled: Boolean
+    submitEnabled: Boolean,
+    keySize: androidx.compose.ui.unit.Dp
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         listOf(listOf("1", "2", "3"), listOf("4", "5", "6"), listOf("7", "8", "9")).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                row.forEach { digit -> PinNumberButton(digit) { onDigit(digit) } }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                row.forEach { digit -> PinNumberButton(digit, keySize) { onDigit(digit) } }
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(18.dp), verticalAlignment = Alignment.CenterVertically) {
-            PinIconButton(onClick = onDelete) {
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            FilledTonalIconButton(onClick = onDelete, modifier = Modifier.size(keySize)) {
                 Icon(Icons.AutoMirrored.Filled.Backspace, stringResource(R.string.back), Modifier.size(23.dp))
             }
-            PinNumberButton("0") { onDigit("0") }
-            PinIconButton(
+            PinNumberButton("0", keySize) { onDigit("0") }
+            FilledIconButton(
                 onClick = onSubmit,
                 enabled = submitEnabled,
-                emphasized = true,
-                description = submitDescription
+                modifier = Modifier.size(keySize).semantics { contentDescription = submitDescription }
             ) {
                 Icon(Icons.AutoMirrored.Filled.ArrowForward, null, Modifier.size(25.dp))
             }
@@ -337,43 +397,51 @@ private fun NumericKeypad(
 }
 
 @Composable
-private fun PinNumberButton(digit: String, onClick: () -> Unit) {
-    Surface(
+private fun PinNumberButton(digit: String, keySize: androidx.compose.ui.unit.Dp, onClick: () -> Unit) {
+    FilledTonalButton(
         onClick = onClick,
-        modifier = Modifier.size(68.dp),
+        modifier = Modifier.size(keySize),
         shape = CircleShape,
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        contentColor = MaterialTheme.colorScheme.onSurface,
-        tonalElevation = 2.dp
+        contentPadding = PaddingValues(0.dp)
     ) {
-        Box(contentAlignment = Alignment.Center) {
-            Text(digit, fontSize = 22.sp, fontWeight = FontWeight.Medium)
-        }
+        Text(digit, fontSize = 30.sp, fontWeight = FontWeight.Medium)
     }
 }
 
-@Composable
-private fun PinIconButton(
-    onClick: () -> Unit,
-    enabled: Boolean = true,
-    emphasized: Boolean = false,
-    description: String? = null,
-    content: @Composable () -> Unit
-) {
-    val descriptionModifier = if (description != null) {
-        Modifier.semantics { contentDescription = description }
-    } else Modifier
-    Surface(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = Modifier.size(68.dp).then(descriptionModifier),
-        shape = CircleShape,
-        color = if (emphasized) MaterialTheme.colorScheme.primary
-        else MaterialTheme.colorScheme.surfaceContainerHigh,
-        contentColor = if (emphasized) MaterialTheme.colorScheme.onPrimary
-        else MaterialTheme.colorScheme.onSurfaceVariant,
-        tonalElevation = 2.dp
-    ) { Box(contentAlignment = Alignment.Center) { content() } }
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+private fun randomizedPinShapePairs(): List<PinShapePair> {
+    val starts = listOf(
+        MaterialShapes.Cookie4Sided,
+        MaterialShapes.Diamond,
+        MaterialShapes.Flower,
+        MaterialShapes.Gem,
+        MaterialShapes.Clover4Leaf,
+        MaterialShapes.Pentagon,
+        MaterialShapes.PuffyDiamond,
+        MaterialShapes.Sunny
+    ).shuffled().take(DEBUG_KEY_LENGTH)
+    val ends = starts.drop(1) + starts.first()
+    return starts.zip(ends) { start, end -> PinShapePair(Morph(start, end)) }
+}
+
+private data class PinShapePair(val morph: Morph)
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+private class MorphProgressShape(
+    private val morph: Morph,
+    private val progress: Float
+) : Shape {
+    override fun createOutline(
+        size: Size,
+        layoutDirection: LayoutDirection,
+        density: Density
+    ): Outline {
+        val path = Path()
+        morph.toPath(progress, path)
+        val matrix = Matrix().apply { scale(size.width, size.height) }
+        path.transform(matrix)
+        return Outline.Generic(path)
+    }
 }
 
 private const val DEBUG_KEY_LENGTH = 4

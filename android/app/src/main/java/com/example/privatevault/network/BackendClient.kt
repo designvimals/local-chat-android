@@ -85,12 +85,12 @@ class BackendClient(
             throw cancelled
         } catch (_: Throwable) {
             _registrationState.value = BackendRegistrationState.Failed(
-                "Cannot reach the relay at $baseUrl. The relay must be deployed on a public HTTPS address."
+                "Cannot reach the connection service at $baseUrl. It must be deployed on a public HTTPS address."
             )
         } finally {
             activeSession = null
             if (_registrationState.value is BackendRegistrationState.Registered) {
-                _registrationState.value = BackendRegistrationState.Failed("Relay disconnected. Reconnecting…")
+                _registrationState.value = BackendRegistrationState.Failed("Connection lost. Reconnecting…")
             }
         }
     }

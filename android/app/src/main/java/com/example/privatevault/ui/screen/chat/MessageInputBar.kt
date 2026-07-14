@@ -3,11 +3,9 @@ package com.example.privatevault.ui.screen.chat
 import android.animation.ValueAnimator
 import android.os.SystemClock
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -21,7 +19,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -29,17 +26,21 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -49,9 +50,12 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.EmojiEmotions
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -71,7 +75,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Path
@@ -109,7 +112,9 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.privatevault.R
 import com.example.privatevault.attachment.AttachmentManager
 import com.example.privatevault.model.ChatAttachment
+import com.example.privatevault.model.Message
 import com.example.privatevault.model.MessageEmphasis
+import com.example.privatevault.model.canonicalAttachments
 import com.example.privatevault.ui.theme.ChatExpressiveTokens
 import kotlin.math.abs
 import kotlin.math.PI
@@ -134,19 +139,27 @@ private val QuickEmojis = listOf(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun MessageInputBar(
-    onSend: (String, Int) -> Unit,
-    onAttachFile: (String) -> Unit,
-    pendingAttachment: ChatAttachment?,
-    onRemovePendingAttachment: () -> Unit,
-    onSendAttachment: (ChatAttachment, String) -> Unit,
+    onSend: suspend (String, Int, String?) -> Result<Message>,
+    onEdit: suspend (String, String) -> Result<Message>,
+    onAttachFiles: () -> Unit,
+    pendingAttachments: List<ChatAttachment>,
+    onRemovePendingAttachment: (String) -> Unit,
+    onSendAttachments: suspend (List<ChatAttachment>, String, String?) -> Result<Message>,
     attachmentManager: AttachmentManager,
     onTextChanged: (String) -> Unit,
+    replyMessage: Message?,
+    editingMessage: Message?,
+    onClearContext: () -> Unit,
+    onSent: (Message) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var text by rememberSaveable { mutableStateOf("") }
     var emojiPanelVisible by rememberSaveable { mutableStateOf(false) }
+    var draftBeforeEdit by remember { mutableStateOf<String?>(null) }
+    var sending by remember { mutableStateOf(false) }
+    var maximumHapticSent by remember { mutableStateOf(false) }
     val trimmed = text.trim()
-    val canSend = trimmed.isNotBlank() || pendingAttachment != null
+    val canSend = !sending && (trimmed.isNotBlank() || (pendingAttachments.isNotEmpty() && editingMessage == null))
     val keyboard = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
     val focusRequester = remember { FocusRequester() }
@@ -169,7 +182,10 @@ fun MessageInputBar(
         text = value
         onTextChanged(value)
     }
-    fun resetGesture() { publish(stateMachine.reset()) }
+    fun resetGesture() {
+        maximumHapticSent = false
+        publish(stateMachine.reset())
+    }
     fun cancelGesture(withHaptic: Boolean = true) {
         if (stateMachine.state.phase == SendInteractionPhase.Idle ||
             stateMachine.state.phase == SendInteractionPhase.Cancelling
@@ -182,15 +198,49 @@ fun MessageInputBar(
             resetGesture()
         }
     }
+    fun clearComposerContext(restoreDraft: Boolean) {
+        val previousDraft = draftBeforeEdit
+        draftBeforeEdit = null
+        if (restoreDraft && previousDraft != null) updateText(previousDraft)
+        onClearContext()
+    }
     fun commit(emphasis: MessageEmphasis = MessageEmphasis.Normal) {
         if (!canSend) return
         cancelResetJob?.cancel()
-        pendingAttachment?.let { onSendAttachment(it, trimmed) }
-            ?: onSend(trimmed, emphasis.storedValue)
-        if (animationsEnabled) sendBurstNonce += 1
-        updateText("")
+        sending = true
+        val edit = editingMessage
+        scope.launch {
+            val result: Result<Message> = when {
+                edit != null -> onEdit(edit.id, trimmed)
+                pendingAttachments.isNotEmpty() -> onSendAttachments(
+                    pendingAttachments,
+                    trimmed,
+                    replyMessage?.id
+                )
+                else -> onSend(trimmed, emphasis.storedValue, replyMessage?.id)
+            }
+            sending = false
+            result.onSuccess { sentMessage ->
+                if (animationsEnabled && edit == null) sendBurstNonce += 1
+                if (edit != null) clearComposerContext(restoreDraft = true)
+                else {
+                    updateText("")
+                    clearComposerContext(restoreDraft = false)
+                }
+                emojiPanelVisible = false
+                resetGesture()
+                if (edit == null) onSent(sentMessage)
+            }
+        }
+    }
+
+    LaunchedEffect(editingMessage?.id) {
+        val edit = editingMessage ?: return@LaunchedEffect
+        if (draftBeforeEdit == null) draftBeforeEdit = text
+        updateText(edit.text)
         emojiPanelVisible = false
-        resetGesture()
+        focusRequester.requestFocus()
+        keyboard?.show()
     }
     fun toggleEmojiPanel() {
         cancelGesture()
@@ -199,11 +249,13 @@ fun MessageInputBar(
             focusManager.clearFocus()
             keyboard?.hide()
         } else {
-            focusRequester.requestFocus()
-            keyboard?.show()
+            scope.launch {
+                androidx.compose.runtime.withFrameNanos { }
+                focusRequester.requestFocus()
+                keyboard?.show()
+            }
         }
     }
-
     DisposableEffect(Unit) { onDispose { onTextChanged("") } }
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -212,14 +264,17 @@ fun MessageInputBar(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
-    LaunchedEffect(trimmed, pendingAttachment) {
+    LaunchedEffect(trimmed, pendingAttachments) {
         if (trimmed.isBlank() && gestureState.phase != SendInteractionPhase.Idle) {
             cancelGesture(withHaptic = false)
         }
     }
     LaunchedEffect(gestureState.popCount) {
         if (gestureState.popCount == 0) return@LaunchedEffect
-        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+        if (!maximumHapticSent) {
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            maximumHapticSent = true
+        }
         if (!animationsEnabled) return@LaunchedEffect
         coroutineScope {
             launch {
@@ -238,31 +293,21 @@ fun MessageInputBar(
                 ))
                 buttonPop.animateTo(1f, spring(dampingRatio = Spring.DampingRatioNoBouncy))
             }
-            launch {
-                previewShake.snapTo(0f)
-                previewShake.animateTo(
-                    targetValue = 0f,
-                    animationSpec = keyframes {
-                        durationMillis = 420
-                        -7f at 45
-                        7f at 90
-                        -6f at 135
-                        5f at 180
-                        -4f at 225
-                        3f at 275
-                        -2f at 330
-                        0f at 420
-                    }
-                )
-            }
         }
+    }
+    LaunchedEffect(gestureState.phase, animationsEnabled) {
+        previewShake.snapTo(0f)
+        if (!animationsEnabled || gestureState.phase != SendInteractionPhase.AtMaximum) return@LaunchedEffect
+        while (isActive && gestureState.phase == SendInteractionPhase.AtMaximum) {
+            previewShake.animateTo(-2.2f, tween(48))
+            previewShake.animateTo(2.2f, tween(48))
+        }
+        previewShake.snapTo(0f)
     }
 
     BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
-            .navigationBarsPadding()
-            .imePadding()
             .background(
                 Brush.verticalGradient(
                     0f to androidx.compose.ui.graphics.Color.Transparent,
@@ -270,12 +315,8 @@ fun MessageInputBar(
                     1f to MaterialTheme.colorScheme.surfaceContainerLowest
                 )
             )
-            .swipeUpToOpenKeyboard(with(density) { 28.dp.toPx() }) {
-                emojiPanelVisible = false
-                focusRequester.requestFocus()
-                keyboard?.show()
-            }
-            .padding(start = 12.dp, top = 28.dp, end = 12.dp, bottom = 8.dp)
+            .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
+            .padding(8.dp)
     ) {
         val dragRangePx = with(density) {
             max(ChatExpressiveTokens.MinimumDragRange.toPx(), maxWidth.toPx() * 0.62f)
@@ -291,12 +332,7 @@ fun MessageInputBar(
             tonalElevation = 2.dp
         ) {
             Column(
-                Modifier
-                    .fillMaxWidth()
-                    .animateContentSize(if (animationsEnabled) spring(
-                        dampingRatio = Spring.DampingRatioNoBouncy,
-                        stiffness = Spring.StiffnessMediumLow
-                    ) else snap())
+                Modifier.fillMaxWidth()
             ) {
                 AnimatedVisibility(
                     visible = gestureState.showsPreview,
@@ -311,7 +347,7 @@ fun MessageInputBar(
                     )
                 }
                 AnimatedVisibility(
-                    visible = pendingAttachment != null,
+                    visible = pendingAttachments.isNotEmpty(),
                     enter = expandVertically(
                         expandFrom = Alignment.Bottom,
                         animationSpec = spring(
@@ -321,70 +357,49 @@ fun MessageInputBar(
                     ) + fadeIn(),
                     exit = shrinkVertically(shrinkTowards = Alignment.Bottom) + fadeOut()
                 ) {
-                    pendingAttachment?.let {
-                        PendingAttachmentPreview(it, attachmentManager, onRemovePendingAttachment)
-                    }
+                    PendingAttachmentPreviews(
+                        pendingAttachments,
+                        attachmentManager,
+                        onRemovePendingAttachment
+                    )
                 }
-                AnimatedVisibility(
-                    visible = emojiPanelVisible,
-                    enter = expandVertically(expandFrom = Alignment.Bottom) + fadeIn(),
-                    exit = shrinkVertically(shrinkTowards = Alignment.Bottom) + fadeOut()
-                ) {
-                    EmojiPanel { emoji -> updateText(text + emoji) }
+                if (replyMessage != null || editingMessage != null) {
+                    ComposerContextBanner(
+                        message = editingMessage ?: replyMessage!!,
+                        editing = editingMessage != null,
+                        onClose = { clearComposerContext(restoreDraft = editingMessage != null) }
+                    )
                 }
+                if (emojiPanelVisible) EmojiPanel { emoji -> updateText(text + emoji) }
                 Box(Modifier.fillMaxWidth()) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(start = 6.dp, top = 2.dp, end = 2.dp, bottom = 2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                     ComposerActionButton(
                         icon = Icons.Default.Add,
                         description = stringResource(R.string.attach_file),
-                        onClick = { cancelGesture(); onAttachFile("*/*") }
+                        onClick = { cancelGesture(); onAttachFiles() }
                     )
-                    Surface(
+                    TextField(
+                        value = text,
+                        onValueChange = ::updateText,
                         modifier = Modifier
                             .weight(1f)
-                            .heightIn(min = 56.dp, max = 136.dp),
-                        shape = RoundedCornerShape(28.dp),
-                        color = MaterialTheme.colorScheme.surface
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(start = 20.dp, end = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            BasicTextField(
-                                value = text,
-                                onValueChange = ::updateText,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("message-composer-input")
-                                    .focusRequester(focusRequester)
-                                    .onFocusChanged { if (it.isFocused) emojiPanelVisible = false },
-                                textStyle = MaterialTheme.typography.bodyLarge.copy(
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    fontSize = 18.sp,
-                                    lineHeight = 24.sp
-                                ),
-                                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                                keyboardOptions = KeyboardOptions(
-                                    capitalization = KeyboardCapitalization.Sentences,
-                                    imeAction = ImeAction.Send
-                                ),
-                                keyboardActions = KeyboardActions(onSend = { commit() }),
-                                maxLines = 5,
-                                decorationBox = { inner ->
-                                    Box(Modifier.padding(vertical = 16.dp)) {
-                                        if (text.isEmpty()) Text(
-                                            stringResource(R.string.message_placeholder),
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            style = MaterialTheme.typography.bodyLarge.copy(fontSize = 18.sp)
-                                        )
-                                        inner()
-                                    }
-                                }
+                            .heightIn(min = 48.dp, max = 112.dp)
+                            .testTag("message-composer-input")
+                            .focusRequester(focusRequester)
+                            .onFocusChanged { if (it.isFocused) emojiPanelVisible = false },
+                        shape = if (text.isBlank()) CircleShape else RoundedCornerShape(24.dp),
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp, lineHeight = 21.sp),
+                        placeholder = {
+                            Text(
+                                stringResource(R.string.message_placeholder),
+                                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp, lineHeight = 21.sp)
                             )
+                        },
+                        trailingIcon = {
                             IconButton(onClick = ::toggleEmojiPanel) {
                                 Icon(
                                     Icons.Outlined.EmojiEmotions,
@@ -394,8 +409,22 @@ fun MessageInputBar(
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-                        }
-                    }
+                        },
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Sentences,
+                            imeAction = ImeAction.Send
+                        ),
+                        keyboardActions = KeyboardActions(onSend = { commit() }),
+                        maxLines = 5,
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = MaterialTheme.colorScheme.surface,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                            disabledContainerColor = MaterialTheme.colorScheme.surface,
+                            focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                            unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                            disabledIndicatorColor = androidx.compose.ui.graphics.Color.Transparent
+                        )
+                    )
                     AnimatedVisibility(
                         visible = canSend,
                         enter = scaleIn(spring(dampingRatio = Spring.DampingRatioMediumBouncy)) + fadeIn(),
@@ -403,7 +432,7 @@ fun MessageInputBar(
                     ) {
                         ExpressiveSendControl(
                             enabled = canSend,
-                            holdEnabled = pendingAttachment == null && trimmed.isNotBlank(),
+                            holdEnabled = pendingAttachments.isEmpty() && trimmed.isNotBlank(),
                             message = trimmed,
                             stateMachine = stateMachine,
                             state = gestureState,
@@ -419,11 +448,13 @@ fun MessageInputBar(
                         )
                     }
                     }
-                    SendStarBurst(
-                        event = sendBurstNonce,
-                        enabled = animationsEnabled,
-                        modifier = Modifier.align(Alignment.CenterEnd).padding(end = 3.dp).size(78.dp)
-                    )
+                    Box(Modifier.matchParentSize()) {
+                        SendStarBurst(
+                            event = sendBurstNonce,
+                            enabled = animationsEnabled,
+                            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 3.dp).size(78.dp)
+                        )
+                    }
                 }
             }
         }
@@ -436,15 +467,70 @@ private fun ComposerActionButton(
     description: String,
     onClick: () -> Unit
 ) {
-    Surface(
+    FilledTonalIconButton(
         onClick = onClick,
-        modifier = Modifier.size(52.dp),
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.72f),
-        contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+        modifier = Modifier.size(48.dp),
+        shape = CircleShape
     ) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Icon(icon, contentDescription = description, modifier = Modifier.size(27.dp))
+        Icon(icon, contentDescription = description, modifier = Modifier.size(25.dp))
+    }
+}
+
+@Composable
+private fun ComposerContextBanner(message: Message, editing: Boolean, onClose: () -> Unit) {
+    val attachments = message.canonicalAttachments
+    val summary = when {
+        message.text.isNotBlank() -> message.text
+        attachments.size == 1 -> attachments.single().name
+        attachments.isNotEmpty() && attachments.all { it.mimeType.startsWith("image/") } ->
+            stringResource(R.string.photo_count, attachments.size)
+        attachments.isNotEmpty() -> stringResource(R.string.attachment_count, attachments.size)
+        else -> stringResource(R.string.message_deleted)
+    }
+    Row(
+        Modifier.fillMaxWidth().padding(start = 16.dp, top = 9.dp, end = 8.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier.size(width = 3.dp, height = 38.dp).clip(RoundedCornerShape(2.dp))
+                .background(MaterialTheme.colorScheme.primary)
+        )
+        Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
+            Text(
+                stringResource(if (editing) R.string.editing_message else R.string.replying_to),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Bold
+            )
+            Text(summary, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
+        }
+        IconButton(onClick = onClose, modifier = Modifier.size(48.dp)) {
+            Icon(
+                Icons.Default.Close,
+                stringResource(if (editing) R.string.cancel_edit else R.string.cancel_reply),
+                Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun PendingAttachmentPreviews(
+    attachments: List<ChatAttachment>,
+    attachmentManager: AttachmentManager,
+    onRemove: (String) -> Unit
+) {
+    LazyRow(
+        modifier = Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 2.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items(attachments, key = ChatAttachment::id) { attachment ->
+            PendingAttachmentPreview(
+                attachment = attachment,
+                attachmentManager = attachmentManager,
+                onRemove = { onRemove(attachment.id) }
+            )
         }
     }
 }
@@ -456,16 +542,14 @@ private fun PendingAttachmentPreview(
     onRemove: () -> Unit
 ) {
     val bitmap by produceState<android.graphics.Bitmap?>(null, attachment.id) {
-        value = withContext(Dispatchers.IO) { attachmentManager.decodePreview(attachment.id, 900) }
+        value = withContext(Dispatchers.IO) { attachmentManager.decodePreview(attachment.id, 960) }
     }
     Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = 18.dp, top = 14.dp, end = 18.dp, bottom = 4.dp)
+        modifier = Modifier.size(width = 112.dp, height = 94.dp)
     ) {
         Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(26.dp),
+            modifier = Modifier.fillMaxSize(),
+            shape = RoundedCornerShape(18.dp),
             color = MaterialTheme.colorScheme.surfaceContainerHigh
         ) {
             if (bitmap != null && attachment.mimeType.startsWith("image/")) {
@@ -473,23 +557,22 @@ private fun PendingAttachmentPreview(
                     bitmap = bitmap!!.asImageBitmap(),
                     contentDescription = stringResource(R.string.image_attachment, attachment.name),
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 148.dp, max = 220.dp)
-                        .clip(RoundedCornerShape(26.dp)),
-                    contentScale = ContentScale.Crop
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(18.dp)),
+                    contentScale = ContentScale.Fit
                 )
             } else {
                 Text(
                     attachment.name,
-                    modifier = Modifier.padding(22.dp),
-                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.padding(12.dp),
+                    style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold
                 )
             }
         }
         Surface(
             onClick = onRemove,
-            modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).size(40.dp),
+            modifier = Modifier.align(Alignment.TopEnd).size(44.dp),
             shape = CircleShape,
             color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.72f),
             contentColor = androidx.compose.ui.graphics.Color.White
@@ -519,7 +602,7 @@ private fun EmphasisPreview(
     val metrics = messageVisualMetrics(
         state.messageSnapshot,
         progress,
-        MaterialTheme.typography.bodyLarge.copy(fontSize = 21.sp, lineHeight = 28.sp)
+        MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp, lineHeight = 21.sp)
     )
     val emphasis = MessageEmphasis.fromProgress(progress)
     val stateLabel = if (state.phase == SendInteractionPhase.Cancelling) {
@@ -529,30 +612,41 @@ private fun EmphasisPreview(
         modifier = Modifier.fillMaxWidth().padding(start = 54.dp, top = 12.dp, end = 16.dp),
         horizontalAlignment = Alignment.End
     ) {
-        Surface(
-            modifier = Modifier
-                .widthIn(max = 340.dp)
-                .graphicsLayer {
-                    scaleX = if (animationsEnabled) popScale.value else 1f
-                    scaleY = if (animationsEnabled) popScale.value else 1f
-                    translationX = if (animationsEnabled) shakeOffsetDp.value.dp.toPx() else 0f
-                    rotationZ = if (animationsEnabled) shakeOffsetDp.value * 0.22f else 0f
-                    transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 1f)
-                }
-                .semantics {
-                    contentDescription = state.messageSnapshot
-                    stateDescription = stateLabel
-                    liveRegion = LiveRegionMode.Polite
-                },
-            shape = ChatExpressiveTokens.OutgoingBubbleShape,
-            color = MaterialTheme.colorScheme.primaryContainer,
-            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-        ) {
+        val previewModifier = Modifier
+            .widthIn(max = 340.dp)
+            .graphicsLayer {
+                scaleX = if (animationsEnabled) popScale.value else 1f
+                scaleY = if (animationsEnabled) popScale.value else 1f
+                translationX = if (animationsEnabled) shakeOffsetDp.value.dp.toPx() else 0f
+                rotationZ = if (animationsEnabled) shakeOffsetDp.value * 0.22f else 0f
+                transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 1f)
+            }
+            .semantics {
+                contentDescription = state.messageSnapshot
+                stateDescription = stateLabel
+                liveRegion = LiveRegionMode.Polite
+            }
+        val emoji = singleEmojiOrNull(state.messageSnapshot)
+        if (emoji != null) {
             Text(
-                state.messageSnapshot,
-                Modifier.padding(metrics.horizontalPadding, metrics.verticalPadding),
-                style = metrics.textStyle
+                emoji,
+                previewModifier.padding(horizontal = 8.dp),
+                fontSize = if (emphasis == MessageEmphasis.Maximum) 72.sp else 64.sp,
+                lineHeight = 76.sp
             )
+        } else {
+            Surface(
+                modifier = previewModifier,
+                shape = ChatExpressiveTokens.OutgoingBubbleShape,
+                color = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+            ) {
+                Text(
+                    state.messageSnapshot,
+                    Modifier.padding(metrics.horizontalPadding, metrics.verticalPadding),
+                    style = metrics.textStyle
+                )
+            }
         }
         Text(
             stringResource(R.string.drag_left_to_reduce),
@@ -601,7 +695,7 @@ private fun ExpressiveSendControl(
     }
     Surface(
         modifier = Modifier
-            .size(54.dp)
+            .size(48.dp)
             .testTag("expressive-send-button")
             .then(
                 if (holdEnabled) Modifier.sendEmphasisGesture(
@@ -768,25 +862,6 @@ private fun Modifier.sendEmphasisGesture(
             } finally {
                 if (!completed && !cancelled) onCancel()
             }
-        }
-    }
-}
-
-private fun Modifier.swipeUpToOpenKeyboard(
-    thresholdPx: Float,
-    onSwipeUp: () -> Unit
-): Modifier = pointerInput(thresholdPx) {
-    awaitEachGesture {
-        val down = awaitFirstDown(requireUnconsumed = false)
-        var triggered = false
-        while (!triggered) {
-            val event = awaitPointerEvent(PointerEventPass.Final)
-            val change = event.changes.firstOrNull { it.id == down.id } ?: break
-            if (change.position.y - down.position.y <= -thresholdPx) {
-                triggered = true
-                onSwipeUp()
-            }
-            if (!change.pressed) break
         }
     }
 }

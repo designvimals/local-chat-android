@@ -8,6 +8,7 @@ import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
+import android.util.LruCache
 import com.example.privatevault.model.ChatAttachment
 import java.io.File
 import java.io.FileOutputStream
@@ -29,21 +30,33 @@ class AttachmentManager(private val context: Context) {
     private val receiving = ConcurrentHashMap.newKeySet<String>()
     private val incomingStreams = ConcurrentHashMap<String, BufferedOutputStream>()
     private val _updates = MutableStateFlow(0L)
+    private val revisions = ConcurrentHashMap<String, MutableStateFlow<Long>>()
+    private val previewCache = object : LruCache<String, Bitmap>(48 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount
+    }
     val updates: StateFlow<Long> = _updates
+
+    fun revision(attachmentId: String): StateFlow<Long> = revisions.getOrPut(attachmentId) {
+        MutableStateFlow(0L)
+    }
 
     fun registerOriginal(uri: Uri): ChatAttachment {
         runCatching {
             context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         val metadata = queryMetadata(uri)
+        val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
+        val dimensions = if (mimeType.startsWith("image/")) queryImageDimensions(uri) else null
         val attachment = ChatAttachment(
             id = "att_${UUID.randomUUID()}",
             name = sanitizeName(metadata.first),
-            mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream",
-            size = metadata.second
+            mimeType = mimeType,
+            size = metadata.second,
+            width = dimensions?.first,
+            height = dimensions?.second
         )
         preferences.edit().putString(originalKey(attachment.id), uri.toString()).apply()
-        notifyChanged()
+        notifyChanged(attachment.id)
         return attachment
     }
 
@@ -68,7 +81,7 @@ class AttachmentManager(private val context: Context) {
         preferences.edit()
             .putString(nameKey(attachment.id), sanitizeName(attachment.name))
             .apply()
-        notifyChanged()
+        notifyChanged(attachment.id)
     }
 
     fun appendIncomingChunk(attachmentId: String, bytes: ByteArray) {
@@ -99,17 +112,20 @@ class AttachmentManager(private val context: Context) {
             .putString(nameKey(attachment.id), sanitizeName(attachment.name))
             .apply()
         receiving.remove(attachment.id)
-        notifyChanged()
+        notifyChanged(attachment.id)
     }
 
     fun discardIncoming(attachmentId: String) {
         incomingStreams.remove(attachmentId)?.close()
         incomingTemporary(attachmentId).delete()
         receiving.remove(attachmentId)
-        notifyChanged()
+        notifyChanged(attachmentId)
     }
 
     fun decodePreview(attachmentId: String, targetSizePx: Int): Bitmap? {
+        val safeTarget = targetSizePx.coerceAtLeast(1)
+        val cacheKey = "$attachmentId:$safeTarget"
+        previewCache.get(cacheKey)?.let { return it }
         return runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 val source = originalUri(attachmentId)?.let { ImageDecoder.createSource(context.contentResolver, it) }
@@ -118,14 +134,20 @@ class AttachmentManager(private val context: Context) {
                 ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
                     val width = info.size.width.coerceAtLeast(1)
                     val height = info.size.height.coerceAtLeast(1)
-                    val scale = minOf(1f, targetSizePx.toFloat() / maxOf(width, height))
+                    val scale = minOf(1f, safeTarget.toFloat() / maxOf(width, height))
                     decoder.setTargetSize((width * scale).toInt().coerceAtLeast(1), (height * scale).toInt().coerceAtLeast(1))
                     decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
                 }
             } else {
-                open(attachmentId).use { BitmapFactory.decodeStream(it) }
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                open(attachmentId).use { BitmapFactory.decodeStream(it, null, bounds) }
+                var sample = 1
+                while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= safeTarget) sample *= 2
+                open(attachmentId).use {
+                    BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
+                }
             }
-        }.getOrNull()
+        }.getOrNull()?.also { previewCache.put(cacheKey, it) }
     }
 
     private fun queryMetadata(uri: Uri): Pair<String, Long> {
@@ -148,6 +170,14 @@ class AttachmentManager(private val context: Context) {
         return name to size
     }
 
+    private fun queryImageDimensions(uri: Uri): Pair<Int, Int>? = runCatching {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, bounds)
+        }
+        if (bounds.outWidth > 0 && bounds.outHeight > 0) bounds.outWidth to bounds.outHeight else null
+    }.getOrNull()
+
     private fun originalUri(id: String): Uri? = preferences.getString(originalKey(id), null)?.let(Uri::parse)
     private fun cachedFile(id: String): File? = preferences.getString(cacheKey(id), null)?.let(::File)
     private fun incomingTemporary(id: String): File = File(attachmentsDirectory, "$id.part")
@@ -155,5 +185,9 @@ class AttachmentManager(private val context: Context) {
     private fun cacheKey(id: String) = "cache:$id"
     private fun nameKey(id: String) = "name:$id"
     private fun sanitizeName(name: String): String = name.replace(Regex("[\\\\/:*?\"<>|]"), "-").take(160).ifBlank { "attachment" }
-    private fun notifyChanged() { _updates.value += 1 }
+    private fun notifyChanged(attachmentId: String) {
+        previewCache.snapshot().keys.filter { it.startsWith("$attachmentId:") }.forEach(previewCache::remove)
+        revisions.getOrPut(attachmentId) { MutableStateFlow(0L) }.value += 1
+        _updates.value += 1
+    }
 }

@@ -120,19 +120,21 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
 
   const statusText = useMemo(() => {
     if (online) return storageEnabled ? "Online · Files available" : "Online · Files paused";
-    if (!relayConnected) return "Relay reconnecting · Messages will wait";
+    if (!relayConnected) return "Reconnecting · Messages will wait";
     if (!lastSeen) return "Phone offline · Messages will wait";
     return `Last connected ${new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(lastSeen))}`;
   }, [lastSeen, online, relayConnected, storageEnabled]);
 
   async function handleSend(text: string) {
+    const now = new Date().toISOString();
     const message: Message = {
       id: crypto.randomUUID(),
       senderDeviceId: session.viewerDeviceId,
       receiverDeviceId: "storage-owner-phone",
       text,
-      timestamp: new Date().toISOString(),
-      status: "pending"
+      timestamp: now,
+      status: "pending",
+      updatedAt: now
     };
     commitMessages([...messagesRef.current, message]);
     void sync();
@@ -179,7 +181,7 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
         </div>
         <div className="privacy-note">
           <ShieldCheck aria-hidden size={18} />
-          <p><strong>Zero-retention relay</strong><span>Messages stay on your devices.</span></p>
+          <p><strong>Device-only messages</strong><span>Messages stay on your devices.</span></p>
         </div>
         <button type="button" className="rail-button" onClick={signOut}>
           <LogOut aria-hidden size={16} /><span>Disconnect</span>

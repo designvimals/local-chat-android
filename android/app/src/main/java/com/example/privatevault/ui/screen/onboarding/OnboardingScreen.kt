@@ -19,38 +19,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.example.privatevault.app.OnboardingPage
 import com.example.privatevault.R
 
 @Composable
 fun OnboardingScreen(
-    page: OnboardingPage,
-    permissionGranted: Boolean?,
     onRequestStorage: () -> Unit,
-    onStartChat: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val copy = when (page) {
-        OnboardingPage.Permission -> OnboardingCopy(
-            title = stringResource(R.string.onboarding_permission_title),
-            body = stringResource(R.string.onboarding_permission_body),
-            cta = stringResource(R.string.onboarding_permission_cta)
-        )
-        OnboardingPage.Result -> if (permissionGranted == true) {
-            OnboardingCopy(
-                title = stringResource(R.string.onboarding_enabled_title),
-                body = stringResource(R.string.onboarding_enabled_body),
-                cta = stringResource(R.string.start_chat)
-            )
-        } else {
-            OnboardingCopy(
-                title = stringResource(R.string.onboarding_disabled_title),
-                body = stringResource(R.string.onboarding_disabled_body),
-                cta = stringResource(R.string.start_chat)
-            )
-        }
-    }
-
     Scaffold(modifier = modifier) { padding ->
         Box(
             modifier = Modifier
@@ -65,33 +40,24 @@ fun OnboardingScreen(
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     Text(
-                        text = copy.title,
+                        text = stringResource(R.string.onboarding_permission_title),
                         style = MaterialTheme.typography.headlineMedium,
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = copy.body,
+                        text = stringResource(R.string.onboarding_permission_body),
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     Button(
                         modifier = Modifier.fillMaxWidth(),
-                        onClick = when (page) {
-                            OnboardingPage.Permission -> onRequestStorage
-                            OnboardingPage.Result -> onStartChat
-                        }
+                        onClick = onRequestStorage
                     ) {
-                        Text(copy.cta)
+                        Text(stringResource(R.string.onboarding_permission_cta))
                     }
                 }
             }
         }
     }
 }
-
-private data class OnboardingCopy(
-    val title: String,
-    val body: String,
-    val cta: String
-)

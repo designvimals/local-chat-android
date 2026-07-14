@@ -9,6 +9,7 @@ import com.example.privatevault.data.repository.ChatRepository
 import com.example.privatevault.data.repository.DeviceRepository
 import com.example.privatevault.model.Message
 import com.example.privatevault.model.ChatAttachment
+import com.example.privatevault.model.canonicalAttachments
 import com.example.privatevault.util.TimeUtils
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
@@ -79,6 +80,7 @@ class PeerRelayClient(
     private val pending = ConcurrentHashMap<String, CompletableDeferred<JsonObject>>()
     private val downloads = ConcurrentHashMap<String, PendingAttachmentDownload>()
     private val uploadedAttachments = ConcurrentHashMap.newKeySet<String>()
+    private val syncedMutationFingerprints = ConcurrentHashMap<String, String>()
     private val syncMutex = Mutex()
     private val _state = MutableStateFlow<PeerConnectionState>(PeerConnectionState.Disconnected)
     val state: StateFlow<PeerConnectionState> = _state
@@ -226,17 +228,33 @@ class PeerRelayClient(
                 put("typing", chatRepository.isLocalTyping())
             })
 
-            for (message in chatRepository.pendingForPeer()) {
-                message.attachment?.takeUnless { uploadedAttachments.contains(it.id) }?.let { attachment ->
-                    uploadAttachment(session, attachment)
-                    uploadedAttachments.add(attachment.id)
+            for (message in chatRepository.messages.value) {
+                val fingerprint = mutationFingerprint(message)
+                val previousFingerprint = syncedMutationFingerprints[message.id]
+                val pendingOwnMessage = message.senderDeviceId == deviceRepository.deviceId &&
+                    message.status in setOf("pending", "sent", "failed")
+                if (!pendingOwnMessage && previousFingerprint == fingerprint) continue
+
+                if (previousFingerprint == null && message.senderDeviceId == deviceRepository.deviceId) {
+                    message.canonicalAttachments.forEach { attachment ->
+                        if (uploadedAttachments.add(attachment.id)) {
+                            runCatching { uploadAttachment(session, attachment) }
+                                .onFailure { uploadedAttachments.remove(attachment.id) }
+                                .getOrThrow()
+                        }
+                    }
                 }
                 val response = request(session, "chat.send", buildJsonObject {
                     put("message", json.encodeToJsonElement(message))
                 })
                 val saved = response["message"]?.let { json.decodeFromJsonElement<Message>(it) }
-                if (saved != null) chatRepository.mergeFromPeer(listOf(saved))
-                else chatRepository.markPeerMessageDelivered(message.id, TimeUtils.nowIso())
+                if (saved != null) {
+                    chatRepository.mergeFromPeer(listOf(saved))
+                    syncedMutationFingerprints[saved.id] = mutationFingerprint(saved)
+                } else {
+                    chatRepository.markPeerMessageDelivered(message.id, TimeUtils.nowIso())
+                    syncedMutationFingerprints[message.id] = fingerprint
+                }
             }
 
             request(session, "chat.read", buildJsonObject {
@@ -249,11 +267,20 @@ class PeerRelayClient(
         }
     }
 
-    private fun mergeResponseMessages(payload: JsonObject): List<Message> {
+    private suspend fun mergeResponseMessages(payload: JsonObject): List<Message> {
         chatRepository.setRemoteTyping(payload["typing"]?.jsonPrimitive?.contentOrNull == "true")
         val messages = payload["messages"]?.jsonArray?.map { json.decodeFromJsonElement<Message>(it) }.orEmpty()
+        messages.forEach { message ->
+            syncedMutationFingerprints[message.id] = mutationFingerprint(message)
+        }
         chatRepository.mergeFromPeer(messages)
         return messages
+    }
+
+    private fun mutationFingerprint(message: Message): String = buildString {
+        append(message.updatedAt).append('|')
+        append(message.deletedAt.orEmpty()).append('|')
+        append(message.deletedForDeviceIds.sorted().joinToString(","))
     }
 
     private suspend fun uploadAttachment(session: DefaultClientWebSocketSession, attachment: ChatAttachment) {
@@ -279,7 +306,7 @@ class PeerRelayClient(
     private suspend fun downloadMissingAttachments(session: DefaultClientWebSocketSession, messages: List<Message>) {
         messages.asSequence()
             .filter { it.senderDeviceId != deviceRepository.deviceId }
-            .mapNotNull(Message::attachment)
+            .flatMap { it.canonicalAttachments.asSequence() }
             .filterNot { attachmentManager.hasLocalBytes(it.id) }
             .distinctBy(ChatAttachment::id)
             .forEach { downloadAttachment(session, it) }

@@ -1,22 +1,24 @@
-@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@file:OptIn(
+    androidx.compose.foundation.ExperimentalFoundationApi::class,
+    androidx.compose.material3.ExperimentalMaterial3Api::class
+)
 
 package com.example.privatevault.ui.screen.chat
 
-import android.animation.ValueAnimator
 import android.text.format.Formatter
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -26,8 +28,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -35,11 +39,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Done
-import androidx.compose.material.icons.filled.DoneAll
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -48,12 +53,17 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.carousel.HorizontalMultiBrowseCarousel
+import androidx.compose.material3.carousel.rememberCarouselState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -61,35 +71,45 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.privatevault.R
 import com.example.privatevault.attachment.AttachmentManager
 import com.example.privatevault.model.ChatAttachment
 import com.example.privatevault.model.Message
 import com.example.privatevault.model.MessageEmphasis
 import com.example.privatevault.model.MessageReaction
+import com.example.privatevault.model.canonicalAttachments
 import com.example.privatevault.ui.theme.ChatExpressiveTokens
 import com.example.privatevault.util.TimeUtils
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private val ReactionChoices = listOf("❤️", "👍", "😂", "😮", "😢", "🔥")
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MessageBubble(
     message: Message,
@@ -99,54 +119,90 @@ fun MessageBubble(
     groupedWithPrevious: Boolean,
     groupedWithNext: Boolean,
     reactedByMe: Set<String>,
+    selected: Boolean,
+    selectionCount: Int,
+    selectionMode: Boolean,
+    showContextMenu: Boolean,
+    replyMessage: Message?,
+    replyMessageIsMine: Boolean,
+    canEdit: Boolean,
+    highlighted: Boolean,
     onToggleReaction: (String) -> Unit,
+    onToggleSelection: () -> Unit,
+    onSelect: () -> Unit,
+    onDismissContextMenu: () -> Unit,
+    onReply: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+    onReplyQuoteClick: (String) -> Unit,
     onImageClick: (ChatAttachment) -> Unit,
     imageModifier: @Composable (ChatAttachment) -> Modifier,
-    animateImageEntrance: Boolean,
     attachmentManager: AttachmentManager,
-    attachmentVersion: Long,
     modifier: Modifier = Modifier
 ) {
+    val haptics = LocalHapticFeedback.current
+    val density = LocalDensity.current
+    val view = LocalView.current
+    val scope = rememberCoroutineScope()
+    var swipeOffset by remember(message.id) { mutableFloatStateOf(0f) }
+    var settleJob by remember(message.id) { mutableStateOf<Job?>(null) }
+    val swipeLimit = with(density) { 72.dp.toPx() }
+    val swipeThreshold = with(density) { 56.dp.toPx() }
+    var thresholdHapticSent by remember(message.id) { mutableStateOf(false) }
+    var menuAbove by remember(message.id) { mutableStateOf(false) }
+    var detailsVisible by remember(message.id) { mutableStateOf(false) }
+    val swipeEnabled = !selectionMode && message.deletedAt == null
+    val sentTime = remember(message.timestamp) { TimeUtils.display(message.timestamp) }
+    val readTime = remember(message.readAt) { message.readAt?.let(TimeUtils::display) }
     val sender = if (isMine) stringResource(R.string.message_from_you)
     else stringResource(R.string.message_from_contact, stringResource(R.string.contact_name))
-    val time = TimeUtils.display(message.timestamp)
-    val status = if (isMine) receiptStatus(message.status) else ""
-    val emphasis = MessageEmphasis.fromStored(message.emphasisLevel)
-    val attachmentDescription = message.attachment?.let {
-        if (it.mimeType.startsWith("image/")) stringResource(R.string.image_attachment, it.name)
-        else stringResource(R.string.file_attachment, it.name)
-    }.orEmpty()
-    val accessibleContent = listOf(message.text, attachmentDescription)
-        .filter(String::isNotBlank)
-        .joinToString(". ")
+    val attachments = message.canonicalAttachments
+    val attachmentDescription = when {
+        attachments.isEmpty() -> ""
+        attachments.size == 1 -> attachments.single().let {
+            if (it.mimeType.startsWith("image/")) stringResource(R.string.image_attachment, it.name)
+            else stringResource(R.string.file_attachment, it.name)
+        }
+        attachments.all { it.mimeType.startsWith("image/") } ->
+            stringResource(R.string.photo_count, attachments.size)
+        else -> stringResource(R.string.attachment_count, attachments.size)
+    }
+    val visibleContent = if (message.deletedAt != null) stringResource(R.string.message_deleted)
+    else listOf(message.text, attachmentDescription).filter(String::isNotBlank).joinToString(". ")
     val accessibilitySummary = stringResource(
         R.string.message_accessibility,
         sender,
-        accessibleContent,
-        time,
-        status
+        visibleContent,
+        sentTime,
+        if (isMine) receiptStatus(message.status) else ""
     )
-    val animationsEnabled = remember { ValueAnimator.areAnimatorsEnabled() }
-    var reactionPickerVisible by remember(message.id) { mutableStateOf(false) }
-    val haptics = LocalHapticFeedback.current
+    val popupAnchorModifier = if (showContextMenu) {
+        Modifier.onGloballyPositioned { coordinates ->
+            menuAbove = coordinates.boundsInWindow().center.y > view.height / 2f
+        }
+    } else Modifier
 
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(top = if (groupedWithPrevious) 1.dp else 14.dp)
-            .semantics(mergeDescendants = true) { contentDescription = accessibilitySummary },
+            .padding(top = if (groupedWithPrevious) 2.dp else 14.dp)
+            .testTag("message-${message.id}")
+            .semantics(mergeDescendants = true) {
+                contentDescription = accessibilitySummary
+                this.selected = selected
+            },
         horizontalAlignment = if (isMine) Alignment.End else Alignment.Start
     ) {
         if (showSenderName && !isMine) {
             Text(
                 stringResource(R.string.contact_name),
-                modifier = Modifier.padding(start = 58.dp, bottom = 7.dp),
+                Modifier.padding(start = 58.dp, bottom = 7.dp),
                 style = MaterialTheme.typography.labelLarge.copy(fontSize = 15.sp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            Modifier.fillMaxWidth(),
             horizontalArrangement = if (isMine) Arrangement.End else Arrangement.Start,
             verticalAlignment = Alignment.Bottom
         ) {
@@ -156,78 +212,175 @@ fun MessageBubble(
                 }
                 Spacer(Modifier.width(6.dp))
             }
-            Box {
-                Box(
-                    modifier = Modifier.combinedClickable(
-                        role = Role.Button,
-                        onClick = {},
-                        onLongClick = {
-                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                            reactionPickerVisible = true
+            Box(
+                modifier = popupAnchorModifier
+                    .draggable(
+                        enabled = swipeEnabled,
+                        orientation = Orientation.Horizontal,
+                        state = rememberDraggableState { delta ->
+                            if (delta <= 0f && swipeOffset <= 0f) return@rememberDraggableState
+                            settleJob?.cancel()
+                            val next = (swipeOffset + delta).coerceAtLeast(0f)
+                            val resisted = if (next <= swipeLimit) next else swipeLimit + (next - swipeLimit) * 0.12f
+                            swipeOffset = resisted.coerceAtMost(swipeLimit + with(density) { 8.dp.toPx() })
+                            if (next >= swipeThreshold && !thresholdHapticSent) {
+                                haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+                                thresholdHapticSent = true
+                            } else if (next < swipeThreshold * 0.72f) thresholdHapticSent = false
+                        },
+                        onDragStopped = { velocity ->
+                            val shouldReply = swipeOffset >= swipeThreshold || velocity > 1_250f
+                            if (shouldReply) onReply()
+                            thresholdHapticSent = false
+                            val startOffset = swipeOffset
+                            settleJob = scope.launch {
+                                Animatable(startOffset).animateTo(
+                                    0f,
+                                    spring(
+                                        dampingRatio = Spring.DampingRatioNoBouncy,
+                                        stiffness = Spring.StiffnessMedium
+                                    )
+                                ) { swipeOffset = value }
+                            }
                         }
                     )
-                ) {
-                    if (emphasis == MessageEmphasis.Maximum &&
-                        message.attachment == null && message.text.length <= 34
-                    ) {
-                        MaximumExpressiveMessage(message.text, time, message.status, isMine)
-                    } else {
-                        ConventionalBubble(
-                            message = message,
-                            isMine = isMine,
-                            time = time,
-                            emphasis = emphasis,
-                            groupedWithPrevious = groupedWithPrevious,
-                            groupedWithNext = groupedWithNext,
-                            animationsEnabled = animationsEnabled,
-                            onImageClick = onImageClick,
-                            imageModifier = imageModifier,
-                            animateImageEntrance = animateImageEntrance,
-                            attachmentManager = attachmentManager,
-                            attachmentVersion = attachmentVersion
+                    .graphicsLayer { translationX = swipeOffset }
+            ) {
+                Box(
+                    Modifier
+                        .clip(bubbleShape(isMine, groupedWithPrevious, groupedWithNext))
+                        .combinedClickable(
+                        role = Role.Button,
+                        onClick = {
+                            if (selectionMode) onToggleSelection()
+                            else if (message.status == "read") detailsVisible = !detailsVisible
+                        },
+                        onLongClick = {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onSelect()
+                        }
                         )
-                    }
+                ) {
+                    MessageSurface(
+                        message = message,
+                        isMine = isMine,
+                        groupedWithPrevious = groupedWithPrevious,
+                        groupedWithNext = groupedWithNext,
+                        selected = selected,
+                        highlighted = highlighted,
+                        replyMessage = replyMessage,
+                        replyMessageIsMine = replyMessageIsMine,
+                        sentTime = sentTime,
+                        readTime = readTime,
+                        showDetails = detailsVisible,
+                        onReplyQuoteClick = onReplyQuoteClick,
+                        onImageClick = onImageClick,
+                        imageModifier = imageModifier,
+                        attachmentManager = attachmentManager
+                    )
                 }
-                ReactionPicker(
-                    expanded = reactionPickerVisible,
-                    onDismiss = { reactionPickerVisible = false },
-                    onReaction = {
-                        reactionPickerVisible = false
-                        onToggleReaction(it)
-                    }
-                )
+                if (showContextMenu) {
+                    MessageContextMenu(
+                        expanded = true,
+                        selectionCount = selectionCount,
+                        menuAbove = menuAbove,
+                        canAct = message.deletedAt == null,
+                        canEdit = canEdit,
+                        onDismiss = onDismissContextMenu,
+                        onReaction = onToggleReaction,
+                        onReply = onReply,
+                        onEdit = onEdit,
+                        onDelete = onDelete
+                    )
+                }
             }
         }
-        if (message.reactions.isNotEmpty()) {
+        if (message.deletedAt == null && message.reactions.isNotEmpty()) {
             ReactionPills(
-                reactions = message.reactions,
-                reactedByMe = reactedByMe,
-                onToggleReaction = onToggleReaction,
-                modifier = Modifier.padding(
-                    start = if (isMine) 0.dp else 58.dp,
-                    end = if (isMine) 8.dp else 0.dp
-                ).offset(y = (-5).dp)
+                message.reactions,
+                reactedByMe,
+                onToggleReaction,
+                Modifier.padding(start = if (isMine) 0.dp else 58.dp, end = if (isMine) 8.dp else 0.dp)
+                    .offset(y = (-5).dp)
             )
         }
     }
 }
 
 @Composable
-private fun ParticipantAvatar() {
-    Surface(
-        modifier = Modifier.size(42.dp),
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.tertiaryContainer,
-        border = BorderStroke(2.dp, MaterialTheme.colorScheme.surface)
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Text(
-                stringResource(R.string.contact_initial).take(1).uppercase(),
-                color = MaterialTheme.colorScheme.onTertiaryContainer,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
+private fun MessageSurface(
+    message: Message,
+    isMine: Boolean,
+    groupedWithPrevious: Boolean,
+    groupedWithNext: Boolean,
+    selected: Boolean,
+    highlighted: Boolean,
+    replyMessage: Message?,
+    replyMessageIsMine: Boolean,
+    sentTime: String,
+    readTime: String?,
+    showDetails: Boolean,
+    onReplyQuoteClick: (String) -> Unit,
+    onImageClick: (ChatAttachment) -> Unit,
+    imageModifier: @Composable (ChatAttachment) -> Modifier,
+    attachmentManager: AttachmentManager
+) {
+    val emphasis = MessageEmphasis.fromStored(message.emphasisLevel)
+    val attachments = message.canonicalAttachments
+    val emoji = remember(message.text, attachments, message.deletedAt) {
+        if (attachments.isEmpty() && message.deletedAt == null) singleEmojiOrNull(message.text) else null
+    }
+    when {
+        message.deletedAt != null -> DeletedMessage(
+            message,
+            isMine,
+            groupedWithPrevious,
+            groupedWithNext,
+            selected,
+            highlighted
+        )
+        emoji != null -> EmojiOnlyMessage(
+            emoji,
+            sentTime,
+            readTime,
+            message.status,
+            isMine,
+            emphasis,
+            message.editedAt != null,
+            selected,
+            highlighted,
+            showDetails
+        )
+        emphasis == MessageEmphasis.Maximum && attachments.isEmpty() && message.text.length <= 34 ->
+            MaximumExpressiveMessage(
+                message.text,
+                sentTime,
+                readTime,
+                message.status,
+                isMine,
+                message.editedAt != null,
+                selected,
+                highlighted,
+                showDetails
             )
-        }
+        else -> ConventionalBubble(
+            message,
+            isMine,
+            sentTime,
+            readTime,
+            emphasis,
+            groupedWithPrevious,
+            groupedWithNext,
+            selected,
+            highlighted,
+            replyMessage,
+            replyMessageIsMine,
+            showDetails,
+            onReplyQuoteClick,
+            onImageClick,
+            imageModifier,
+            attachmentManager
+        )
     }
 }
 
@@ -235,80 +388,84 @@ private fun ParticipantAvatar() {
 private fun ConventionalBubble(
     message: Message,
     isMine: Boolean,
-    time: String,
+    sentTime: String,
+    readTime: String?,
     emphasis: MessageEmphasis,
     groupedWithPrevious: Boolean,
     groupedWithNext: Boolean,
-    animationsEnabled: Boolean,
+    selected: Boolean,
+    highlighted: Boolean,
+    replyMessage: Message?,
+    replyMessageIsMine: Boolean,
+    showDetails: Boolean,
+    onReplyQuoteClick: (String) -> Unit,
     onImageClick: (ChatAttachment) -> Unit,
     imageModifier: @Composable (ChatAttachment) -> Modifier,
-    animateImageEntrance: Boolean,
-    attachmentManager: AttachmentManager,
-    attachmentVersion: Long
+    attachmentManager: AttachmentManager
 ) {
     BoxWithConstraints {
-        val maxBubbleWidth = maxWidth * ChatExpressiveTokens.MessageMaxWidthFraction
         val metrics = messageVisualMetrics(
-            text = message.text,
-            progress = emphasis.progress,
-            baseStyle = MaterialTheme.typography.bodyLarge.copy(fontSize = 21.sp, lineHeight = 28.sp)
+            message.text,
+            emphasis.progress,
+            MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp, lineHeight = 21.sp)
         )
-        val shape = bubbleShape(isMine, groupedWithPrevious, groupedWithNext)
+        val selectedColor = MaterialTheme.colorScheme.tertiaryContainer
+        val attachments = message.canonicalAttachments
         Surface(
-            modifier = Modifier.widthIn(max = maxBubbleWidth),
-            color = if (isMine) MaterialTheme.colorScheme.primaryContainer
-            else MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.68f),
-            contentColor = if (isMine) MaterialTheme.colorScheme.onPrimaryContainer
+            modifier = Modifier.widthIn(max = maxWidth * ChatExpressiveTokens.MessageMaxWidthFraction),
+            color = when {
+                selected || highlighted -> selectedColor
+                isMine -> MaterialTheme.colorScheme.primaryContainer
+                else -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.68f)
+            },
+            contentColor = if (selected || highlighted) MaterialTheme.colorScheme.onTertiaryContainer
+            else if (isMine) MaterialTheme.colorScheme.onPrimaryContainer
             else MaterialTheme.colorScheme.onSecondaryContainer,
-            shape = shape,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f)),
+            shape = bubbleShape(isMine, groupedWithPrevious, groupedWithNext),
             tonalElevation = if (isMine) 1.dp else 0.dp
         ) {
             Column(
-                modifier = Modifier
-                    .animateContentSize(if (animationsEnabled) spring(
-                        dampingRatio = Spring.DampingRatioNoBouncy,
-                        stiffness = Spring.StiffnessMediumLow
-                    ) else snap())
-                    .padding(
-                        horizontal = if (message.attachment != null) 5.dp else metrics.horizontalPadding,
-                        vertical = if (message.attachment != null) 5.dp else metrics.verticalPadding
-                    ),
+                Modifier.padding(
+                    horizontal = if (attachments.isNotEmpty()) 5.dp else metrics.horizontalPadding,
+                    vertical = if (attachments.isNotEmpty()) 5.dp else metrics.verticalPadding
+                ),
                 verticalArrangement = Arrangement.spacedBy(7.dp)
             ) {
-                message.attachment?.let { attachment ->
-                    AttachmentContent(
-                        attachment = attachment,
+                message.replyToMessageId?.let { targetId ->
+                    ReplyQuote(replyMessage, replyMessageIsMine, targetId, onReplyQuoteClick)
+                }
+                if (attachments.isNotEmpty()) {
+                    MessageAttachments(
+                        attachments = attachments,
                         attachmentManager = attachmentManager,
-                        attachmentVersion = attachmentVersion,
-                        imageModifier = imageModifier(attachment),
-                        onImageClick = { onImageClick(attachment) },
-                        animateEntrance = animateImageEntrance && animationsEnabled
+                        imageModifier = imageModifier,
+                        onImageClick = onImageClick
                     )
                 }
                 if (message.text.isNotBlank()) {
-                    SelectionContainer {
-                        Text(
-                            message.text,
-                            modifier = Modifier.padding(
-                                horizontal = if (message.attachment != null) 10.dp else 0.dp,
-                                vertical = if (message.attachment != null) 3.dp else 0.dp
-                            ),
-                            style = metrics.textStyle
-                        )
-                    }
+                    Text(
+                        message.text,
+                        Modifier.padding(
+                            horizontal = if (attachments.isNotEmpty()) 10.dp else 0.dp,
+                            vertical = if (attachments.isNotEmpty()) 3.dp else 0.dp
+                        ),
+                        style = metrics.textStyle
+                    )
                 }
-                LinkPreviewLoader.firstUrl(message.text)?.let { url ->
+                remember(message.text) { LinkPreviewLoader.firstUrl(message.text) }?.let { url ->
                     val preview by produceState(LinkPreviewLoader.fallback(url), url) {
                         value = LinkPreviewLoader.load(url)
                     }
                     LinkPreviewCard(preview)
                 }
                 MessageMeta(
-                    time,
-                    message.status,
-                    isMine,
-                    Modifier.align(Alignment.End).padding(horizontal = if (message.attachment != null) 7.dp else 0.dp)
+                    sentTime = sentTime,
+                    readTime = readTime,
+                    status = message.status,
+                    isMine = isMine,
+                    edited = message.editedAt != null,
+                    showDetails = showDetails,
+                    modifier = Modifier.align(Alignment.End).padding(horizontal = if (attachments.isNotEmpty()) 7.dp else 0.dp)
                 )
             }
         }
@@ -316,115 +473,247 @@ private fun ConventionalBubble(
 }
 
 @Composable
-private fun MaximumExpressiveMessage(text: String, time: String, status: String, isMine: Boolean) {
-    val colors = MaterialTheme.colorScheme
-    Column(
-        modifier = Modifier.widthIn(max = 350.dp).padding(horizontal = 6.dp, vertical = 10.dp),
-        horizontalAlignment = Alignment.End
-    ) {
-        Box(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-            Text(
-                text = "✦",
-                modifier = Modifier.align(Alignment.TopEnd).offset(x = 8.dp, y = (-14).dp),
-                fontSize = 24.sp,
-                color = colors.tertiary
-            )
-            Text(
-                text = text,
-                style = TextStyle(
-                    brush = Brush.linearGradient(listOf(colors.primary, colors.tertiary)),
-                    fontFamily = MaterialTheme.typography.displayLarge.fontFamily,
-                    fontWeight = FontWeight.Black,
-                    fontSize = when {
-                        text.length <= 8 -> 68.sp
-                        text.length <= 18 -> 54.sp
-                        else -> 42.sp
-                    },
-                    lineHeight = when {
-                        text.length <= 8 -> 72.sp
-                        text.length <= 18 -> 58.sp
-                        else -> 47.sp
-                    },
-                    shadow = Shadow(colors.primary.copy(alpha = 0.22f), blurRadius = 18f)
-                )
-            )
-            Text(
-                text = "✦",
-                modifier = Modifier.align(Alignment.BottomStart).offset(x = (-13).dp, y = 12.dp),
-                fontSize = 18.sp,
-                color = colors.primary.copy(alpha = 0.72f)
-            )
+private fun ReplyQuote(message: Message?, messageIsMine: Boolean, targetId: String, onClick: (String) -> Unit) {
+    val unavailable = message == null
+    val deleted = message?.deletedAt != null
+    val summary = when {
+        unavailable -> stringResource(R.string.original_message_unavailable)
+        deleted -> stringResource(R.string.message_deleted)
+        message.text.isNotBlank() -> message.text
+        else -> {
+            val attachments = message.canonicalAttachments
+            when {
+                attachments.size == 1 -> attachments.single().name
+                attachments.isNotEmpty() && attachments.all { it.mimeType.startsWith("image/") } ->
+                    stringResource(R.string.photo_count, attachments.size)
+                attachments.isNotEmpty() -> stringResource(R.string.attachment_count, attachments.size)
+                else -> stringResource(R.string.original_message_unavailable)
+            }
         }
-        MessageMeta(time, status, isMine)
     }
-}
-
-private fun bubbleShape(isMine: Boolean, previous: Boolean, next: Boolean): RoundedCornerShape {
-    val large = 28.dp
-    val joined = 9.dp
-    return if (isMine) {
-        RoundedCornerShape(
-            topStart = large,
-            topEnd = if (previous) joined else large,
-            bottomEnd = if (next) joined else 7.dp,
-            bottomStart = large
-        )
-    } else {
-        RoundedCornerShape(
-            topStart = if (previous) joined else large,
-            topEnd = large,
-            bottomEnd = large,
-            bottomStart = if (next) joined else 7.dp
-        )
+    Surface(
+        onClick = { onClick(targetId) },
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.52f)
+    ) {
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
+            Text(
+                if (message == null) stringResource(R.string.original_message)
+                else if (messageIsMine) stringResource(R.string.message_from_you)
+                else stringResource(R.string.contact_name),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Bold
+            )
+            Text(summary, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
+        }
     }
 }
 
 @Composable
-private fun ReactionPicker(
+private fun DeletedMessage(
+    message: Message,
+    isMine: Boolean,
+    groupedWithPrevious: Boolean,
+    groupedWithNext: Boolean,
+    selected: Boolean,
+    highlighted: Boolean
+) {
+    Surface(
+        shape = bubbleShape(isMine, groupedWithPrevious, groupedWithNext),
+        color = if (selected || highlighted) MaterialTheme.colorScheme.tertiaryContainer
+        else MaterialTheme.colorScheme.surfaceContainerHigh
+    ) {
+        Row(Modifier.padding(horizontal = 15.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.Delete, null, Modifier.size(17.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(7.dp))
+            Text(
+                stringResource(R.string.message_deleted),
+                style = MaterialTheme.typography.bodyMedium,
+                fontStyle = FontStyle.Italic,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun EmojiOnlyMessage(
+    emoji: String,
+    sentTime: String,
+    readTime: String?,
+    status: String,
+    isMine: Boolean,
+    emphasis: MessageEmphasis,
+    edited: Boolean,
+    selected: Boolean,
+    highlighted: Boolean,
+    showDetails: Boolean
+) {
+    Surface(
+        color = if (selected || highlighted) MaterialTheme.colorScheme.tertiaryContainer
+        else androidx.compose.ui.graphics.Color.Transparent,
+        shape = RoundedCornerShape(20.dp),
+        border = null
+    ) {
+        Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+            Text(emoji, fontSize = if (emphasis == MessageEmphasis.Maximum) 72.sp else 64.sp, lineHeight = 76.sp)
+            MessageMeta(sentTime, readTime, status, isMine, edited, showDetails)
+        }
+    }
+}
+
+@Composable
+private fun MaximumExpressiveMessage(
+    text: String,
+    sentTime: String,
+    readTime: String?,
+    status: String,
+    isMine: Boolean,
+    edited: Boolean,
+    selected: Boolean,
+    highlighted: Boolean,
+    showDetails: Boolean
+) {
+    val colors = MaterialTheme.colorScheme
+    Surface(
+        color = if (selected || highlighted) colors.tertiaryContainer
+        else androidx.compose.ui.graphics.Color.Transparent,
+        shape = RoundedCornerShape(20.dp),
+        border = null
+    ) {
+        Column(
+            Modifier.widthIn(max = 350.dp).padding(horizontal = 6.dp, vertical = 10.dp),
+            horizontalAlignment = Alignment.End
+        ) {
+            Box(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                Text("✦", Modifier.align(Alignment.TopEnd).offset(x = 8.dp, y = (-14).dp), fontSize = 24.sp, color = colors.tertiary)
+                Text(
+                    text,
+                    style = TextStyle(
+                        brush = Brush.linearGradient(listOf(colors.primary, colors.tertiary)),
+                        fontFamily = MaterialTheme.typography.displayLarge.fontFamily,
+                        fontWeight = FontWeight.Black,
+                        fontSize = when { text.length <= 8 -> 68.sp; text.length <= 18 -> 54.sp; else -> 42.sp },
+                        lineHeight = when { text.length <= 8 -> 72.sp; text.length <= 18 -> 58.sp; else -> 47.sp },
+                        shadow = Shadow(colors.primary.copy(alpha = 0.22f), blurRadius = 18f)
+                    )
+                )
+                Text("✦", Modifier.align(Alignment.BottomStart).offset(x = (-13).dp, y = 12.dp), fontSize = 18.sp, color = colors.primary.copy(alpha = 0.72f))
+            }
+            MessageMeta(sentTime, readTime, status, isMine, edited, showDetails)
+        }
+    }
+}
+
+@Composable
+private fun MessageContextMenu(
     expanded: Boolean,
+    selectionCount: Int,
+    menuAbove: Boolean,
+    canAct: Boolean,
+    canEdit: Boolean,
     onDismiss: () -> Unit,
-    onReaction: (String) -> Unit
+    onReaction: (String) -> Unit,
+    onReply: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
 ) {
     DropdownMenu(
         expanded = expanded,
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(26.dp),
+        shape = RoundedCornerShape(22.dp),
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
     ) {
-        Row(Modifier.padding(horizontal = 8.dp, vertical = 2.dp)) {
-            ReactionChoices.forEach { emoji ->
-                val description = stringResource(R.string.insert_emoji, emoji)
-                IconButton(
-                    onClick = { onReaction(emoji) },
-                    modifier = Modifier.size(46.dp).semantics { contentDescription = description }
-                ) { Text(emoji, fontSize = 23.sp) }
-            }
+        if (selectionCount > 1) {
+            ActionRow(false, false, onReply, onEdit, onDelete)
+        } else {
+            if (menuAbove) ReactionRow(canAct, onReaction)
+            ActionRow(canAct, canEdit, onReply, onEdit, onDelete)
+            if (!menuAbove) ReactionRow(canAct, onReaction)
         }
     }
 }
 
 @Composable
-private fun ReactionPills(
-    reactions: List<MessageReaction>,
-    reactedByMe: Set<String>,
-    onToggleReaction: (String) -> Unit,
-    modifier: Modifier = Modifier
+private fun ReactionRow(enabled: Boolean, onReaction: (String) -> Unit) {
+    Row(Modifier.padding(horizontal = 7.dp, vertical = 2.dp)) {
+        ReactionChoices.forEach { emoji ->
+            val description = stringResource(R.string.insert_emoji, emoji)
+            IconButton(
+                enabled = enabled,
+                onClick = { onReaction(emoji) },
+                modifier = Modifier.size(44.dp).semantics { contentDescription = description }
+            ) { Text(emoji, fontSize = 22.sp) }
+        }
+    }
+}
+
+@Composable
+private fun ActionRow(
+    canReply: Boolean,
+    canEdit: Boolean,
+    onReply: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
 ) {
+    Row(Modifier.padding(horizontal = 8.dp, vertical = 2.dp)) {
+        if (canReply) ContextAction(Icons.AutoMirrored.Filled.Reply, stringResource(R.string.reply), onReply)
+        if (canEdit) ContextAction(Icons.Default.Edit, stringResource(R.string.edit), onEdit)
+        ContextAction(Icons.Default.Delete, stringResource(R.string.delete), onDelete)
+    }
+}
+
+@Composable
+private fun ContextAction(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
+    TextButton(onClick = onClick) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(icon, null, Modifier.size(20.dp))
+            Text(label, style = MaterialTheme.typography.labelSmall)
+        }
+    }
+}
+
+@Composable
+private fun ParticipantAvatar() {
+    Surface(Modifier.size(42.dp), CircleShape, MaterialTheme.colorScheme.tertiaryContainer, border = BorderStroke(2.dp, MaterialTheme.colorScheme.surface)) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(stringResource(R.string.contact_initial).take(1).uppercase(), color = MaterialTheme.colorScheme.onTertiaryContainer, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+private fun bubbleShape(isMine: Boolean, previous: Boolean, next: Boolean): RoundedCornerShape {
+    val outer = 24.dp
+    val joined = 4.dp
+    return if (isMine) {
+        RoundedCornerShape(
+            topStart = outer,
+            topEnd = if (previous) joined else outer,
+            bottomEnd = if (next) joined else outer,
+            bottomStart = outer
+        )
+    } else {
+        RoundedCornerShape(
+            topStart = if (previous) joined else outer,
+            topEnd = outer,
+            bottomEnd = outer,
+            bottomStart = if (next) joined else outer
+        )
+    }
+}
+
+@Composable
+private fun ReactionPills(reactions: List<MessageReaction>, reactedByMe: Set<String>, onToggleReaction: (String) -> Unit, modifier: Modifier = Modifier) {
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
         reactions.forEach { reaction ->
             Surface(
                 onClick = { onToggleReaction(reaction.emoji) },
                 shape = RoundedCornerShape(18.dp),
-                color = if (reaction.emoji in reactedByMe) MaterialTheme.colorScheme.tertiaryContainer
-                else MaterialTheme.colorScheme.surfaceContainerHigh,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
-                shadowElevation = 3.dp
+                color = if (reaction.emoji in reactedByMe) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
             ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                ) {
+                Row(Modifier.padding(horizontal = 10.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text(reaction.emoji, fontSize = 17.sp)
                     Text(reaction.count.toString(), style = MaterialTheme.typography.labelLarge)
                 }
@@ -437,11 +726,9 @@ private fun ReactionPills(
 private fun LinkPreviewCard(preview: LinkPreview) {
     val uriHandler = LocalUriHandler.current
     Surface(
-        modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min).combinedClickable(
-            role = Role.Button,
-            onClick = { runCatching { uriHandler.openUri(preview.url) } },
-            onLongClick = {}
-        ),
+        modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min).clickable(role = Role.Button) {
+            runCatching { uriHandler.openUri(preview.url) }
+        },
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.58f),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)),
         shape = RoundedCornerShape(16.dp)
@@ -449,77 +736,110 @@ private fun LinkPreviewCard(preview: LinkPreview) {
         Row {
             Box(Modifier.width(4.dp).fillMaxHeight().background(MaterialTheme.colorScheme.primary))
             Column(Modifier.padding(horizontal = 11.dp, vertical = 9.dp)) {
-                Text(
-                    preview.host.uppercase(),
-                    color = MaterialTheme.colorScheme.primary,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1
-                )
-                if (!preview.title.equals(preview.host, true)) Text(
-                    preview.title,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Text(preview.host.uppercase(), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, maxLines = 1)
+                if (!preview.title.equals(preview.host, true)) Text(preview.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
     }
 }
 
 @Composable
-private fun AttachmentContent(
-    attachment: ChatAttachment,
+private fun MessageAttachments(
+    attachments: List<ChatAttachment>,
     attachmentManager: AttachmentManager,
-    attachmentVersion: Long,
-    imageModifier: Modifier,
-    onImageClick: () -> Unit,
-    animateEntrance: Boolean
+    imageModifier: @Composable (ChatAttachment) -> Modifier,
+    onImageClick: (ChatAttachment) -> Unit
 ) {
-    if (attachment.mimeType.startsWith("image/")) {
-        val bitmap by produceState<android.graphics.Bitmap?>(null, attachment.id, attachmentVersion) {
-            value = withContext(Dispatchers.IO) { attachmentManager.decodePreview(attachment.id, 1_440) }
-        }
-        var revealed by remember(attachment.id) { mutableStateOf(!animateEntrance) }
-        LaunchedEffect(attachment.id, animateEntrance) {
-            if (animateEntrance) {
-                delay(18)
-                revealed = true
+    val images = remember(attachments) { attachments.filter { it.mimeType.startsWith("image/") } }
+    val files = remember(attachments) { attachments.filterNot { it.mimeType.startsWith("image/") } }
+    when (images.size) {
+        0 -> Unit
+        1 -> ImageAttachmentContent(
+            attachment = images.single(),
+            attachmentManager = attachmentManager,
+            imageModifier = imageModifier(images.single()),
+            onImageClick = { onImageClick(images.single()) }
+        )
+        else -> HorizontalMultiBrowseCarousel(
+            state = rememberCarouselState { images.size },
+            modifier = Modifier.fillMaxWidth().height(240.dp),
+            preferredItemWidth = 180.dp,
+            itemSpacing = 8.dp
+        ) { index ->
+            val attachment = images[index]
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .maskClip(RoundedCornerShape(23.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                ImageAttachmentContent(
+                    attachment = attachment,
+                    attachmentManager = attachmentManager,
+                    imageModifier = imageModifier(attachment),
+                    onImageClick = { onImageClick(attachment) },
+                    fillCarouselItem = true,
+                    position = index + 1,
+                    total = images.size
+                )
             }
         }
-        AnimatedVisibility(
-            visible = revealed,
-            enter = expandVertically(
-                expandFrom = Alignment.Bottom,
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                    stiffness = Spring.StiffnessLow
-                )
-            ) + slideInVertically(
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                    stiffness = Spring.StiffnessMediumLow
-                ),
-                initialOffsetY = { it }
-            ) + fadeIn()
+    }
+    files.forEach { FileAttachmentCard(it) }
+}
+
+@Composable
+private fun ImageAttachmentContent(
+    attachment: ChatAttachment,
+    attachmentManager: AttachmentManager,
+    imageModifier: Modifier,
+    onImageClick: () -> Unit,
+    fillCarouselItem: Boolean = false,
+    position: Int = 1,
+    total: Int = 1
+) {
+    val revision by remember(attachment.id) { attachmentManager.revision(attachment.id) }.collectAsStateWithLifecycle()
+    val bitmap by produceState<android.graphics.Bitmap?>(null, attachment.id, revision) {
+        value = withContext(Dispatchers.IO) { attachmentManager.decodePreview(attachment.id, 960) }
+    }
+    val alpha by animateFloatAsState(if (bitmap == null) 0f else 1f, tween(140), label = "attachment-alpha")
+    val scale by animateFloatAsState(if (bitmap == null) 0.98f else 1f, tween(180), label = "attachment-scale")
+    val imageAspect = remember(bitmap, attachment.width, attachment.height) {
+        when {
+            bitmap != null -> bitmap!!.width.toFloat() / bitmap!!.height.coerceAtLeast(1)
+            attachment.width != null && attachment.height != null ->
+                attachment.width.toFloat() / attachment.height.coerceAtLeast(1)
+            else -> 4f / 3f
+        }.coerceIn(0.35f, 3f)
+    }
+    BoxWithConstraints(if (fillCarouselItem) Modifier.fillMaxSize() else Modifier) {
+        val availableHeight = if (fillCarouselItem) maxHeight else 240.dp
+        val imageWidth = minOf(maxWidth, availableHeight * imageAspect)
+        val imageHeight = minOf(availableHeight, imageWidth / imageAspect)
+        Box(
+            Modifier
+                .size(width = imageWidth, height = imageHeight)
+                .align(Alignment.Center)
+                .clip(RoundedCornerShape(23.dp))
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.45f)),
+            contentAlignment = Alignment.Center
         ) {
             when {
                 bitmap != null -> Image(
-                    bitmap = bitmap!!.asImageBitmap(),
-                    contentDescription = stringResource(R.string.image_attachment, attachment.name),
-                    modifier = Modifier.fillMaxWidth().aspectRatio(4f / 3f)
-                        .then(imageModifier)
-                        .clip(RoundedCornerShape(23.dp))
-                        .combinedClickable(onClick = onImageClick, onLongClick = {}),
-                    contentScale = ContentScale.Crop
+                    bitmap!!.asImageBitmap(),
+                    if (total > 1) stringResource(R.string.image_position, position, total)
+                    else stringResource(R.string.image_attachment, attachment.name),
+                    Modifier.fillMaxSize().then(imageModifier).graphicsLayer {
+                        this.alpha = alpha
+                        scaleX = scale
+                        scaleY = scale
+                    }.clickable(onClick = onImageClick),
+                    contentScale = ContentScale.Fit
                 )
                 attachmentManager.isReceiving(attachment.id) -> AttachmentPlaceholder(attachment)
                 else -> FileAttachmentCard(attachment)
             }
         }
-    } else {
-        FileAttachmentCard(attachment)
     }
 }
 
@@ -527,19 +847,11 @@ private fun AttachmentContent(
 private fun FileAttachmentCard(attachment: ChatAttachment) {
     val context = LocalContext.current
     Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f), shape = RoundedCornerShape(18.dp)) {
-        Row(
-            Modifier.padding(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Default.AttachFile, null)
             Column(Modifier.weight(1f)) {
                 Text(attachment.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                if (attachment.size >= 0) Text(
-                    Formatter.formatShortFileSize(context, attachment.size),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                if (attachment.size >= 0) Text(Formatter.formatShortFileSize(context, attachment.size), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -547,48 +859,61 @@ private fun FileAttachmentCard(attachment: ChatAttachment) {
 
 @Composable
 private fun AttachmentPlaceholder(attachment: ChatAttachment) {
-    Box(
-        Modifier.fillMaxWidth().aspectRatio(4f / 3f).clip(RoundedCornerShape(23.dp)),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            CircularProgressIndicator(Modifier.size(26.dp), strokeWidth = 2.dp)
-            Spacer(Modifier.height(8.dp))
-            Text(attachment.name, style = MaterialTheme.typography.labelMedium)
-        }
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        CircularProgressIndicator(Modifier.size(26.dp), strokeWidth = 2.dp)
+        Spacer(Modifier.height(8.dp))
+        Text(attachment.name, style = MaterialTheme.typography.labelMedium)
     }
 }
 
 @Composable
-private fun MessageMeta(time: String, status: String, isMine: Boolean, modifier: Modifier = Modifier) {
+private fun MessageMeta(
+    sentTime: String,
+    readTime: String?,
+    status: String,
+    isMine: Boolean,
+    edited: Boolean,
+    showDetails: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val isRead = status == "read"
+    if (isRead && !showDetails && !edited) return
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            time,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1
-        )
-        if (isMine) {
-            Spacer(Modifier.width(5.dp))
-            ReceiptIcon(status)
+        if (edited) {
+            Text(stringResource(R.string.edited), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (showDetails || !isRead) Spacer(Modifier.width(5.dp))
+        }
+        if (isRead && showDetails) {
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    stringResource(R.string.message_sent_at, sentTime),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+                readTime?.let {
+                    Text(
+                        stringResource(R.string.message_read_at, it),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
+                    )
+                }
+            }
+        } else if (!isRead) {
+            Text(sentTime, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+            if (isMine) {
+                Spacer(Modifier.width(5.dp))
+                ReceiptIcon(status)
+            }
         }
     }
 }
 
 @Composable
 private fun ReceiptIcon(status: String) {
-    val icon = when (status) {
-        "read", "delivered" -> Icons.Default.DoneAll
-        "sent" -> Icons.Default.Done
-        else -> Icons.Default.Schedule
-    }
-    Icon(
-        icon,
-        null,
-        Modifier.size(15.dp),
-        tint = if (status == "read") MaterialTheme.colorScheme.tertiary
-        else MaterialTheme.colorScheme.onSurfaceVariant
-    )
+    val icon = if (status == "sent" || status == "delivered") Icons.Default.Done else Icons.Default.Schedule
+    Icon(icon, null, Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
 @Composable

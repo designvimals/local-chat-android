@@ -3,6 +3,7 @@ package com.example.privatevault.ui.screen.chat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.privatevault.data.repository.ChatRepository
+import com.example.privatevault.model.DeleteScope
 import com.example.privatevault.model.Message
 import com.example.privatevault.model.ChatAttachment
 import com.example.privatevault.model.MessageReaction
@@ -17,22 +18,46 @@ class ChatViewModel(private val chatRepository: ChatRepository) : ViewModel() {
     val remoteTyping: StateFlow<Boolean> = chatRepository.remoteTyping
     private var typingTimeout: Job? = null
 
-    fun send(text: String, emphasisLevel: Int = 0) {
+    suspend fun send(
+        text: String,
+        emphasisLevel: Int = 0,
+        replyToMessageId: String? = null
+    ): Result<Message> = runCatching {
         val trimmed = text.trim()
-        if (trimmed.isNotBlank()) {
-            chatRepository.sendMessage(trimmed, emphasisLevel)
-            stopTyping()
-        }
+        require(trimmed.isNotBlank()) { "Type a message before sending." }
+        chatRepository.sendMessage(trimmed, emphasisLevel, replyToMessageId).also { stopTyping() }
     }
 
-    fun sendAttachment(attachment: ChatAttachment, caption: String = ""): Message {
-        stopTyping()
-        return chatRepository.sendAttachment(attachment, caption)
+    suspend fun sendAttachment(
+        attachment: ChatAttachment,
+        caption: String = "",
+        replyToMessageId: String? = null
+    ): Result<Message> = runCatching {
+        chatRepository.sendAttachment(attachment, caption, replyToMessageId).also { stopTyping() }
+    }
+
+    suspend fun sendAttachments(
+        attachments: List<ChatAttachment>,
+        caption: String = "",
+        replyToMessageId: String? = null
+    ): Result<Message> = runCatching {
+        require(attachments.isNotEmpty()) { "Choose at least one attachment." }
+        chatRepository.sendAttachments(attachments, caption, replyToMessageId).also { stopTyping() }
     }
 
     fun toggleReaction(messageId: String, emoji: String) {
-        chatRepository.toggleReaction(messageId, emoji)
+        viewModelScope.launch { chatRepository.toggleReaction(messageId, emoji) }
     }
+
+    suspend fun editMessage(messageId: String, text: String): Result<Message> =
+        runCatching { chatRepository.editMessage(messageId, text) }
+
+    suspend fun deleteMessages(messageIds: Set<String>, scope: DeleteScope): Result<List<Message>> =
+        runCatching { chatRepository.deleteMessages(messageIds, scope) }
+
+    fun canEdit(message: Message): Boolean = chatRepository.canEdit(message)
+
+    fun currentDeviceId(): String = chatRepository.currentDeviceId()
 
     fun isCurrentUserReaction(reaction: MessageReaction): Boolean =
         chatRepository.isCurrentUserReaction(reaction)
@@ -61,7 +86,7 @@ class ChatViewModel(private val chatRepository: ChatRepository) : ViewModel() {
     }
 
     fun markIncomingRead() {
-        chatRepository.markIncomingReadOnPhone()
+        viewModelScope.launch { chatRepository.markIncomingReadOnPhone() }
     }
 
     fun isMine(message: Message): Boolean = chatRepository.isMine(message)

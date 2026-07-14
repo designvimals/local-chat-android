@@ -36,6 +36,7 @@ android {
         targetSdk = 37
         versionCode = 8
         versionName = "0.3.2"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         val releaseRequested = gradle.startParameter.taskNames.any { task ->
             task.contains("Release", ignoreCase = true)
@@ -100,7 +101,7 @@ dependencies {
     implementation("androidx.metrics:metrics-performance:1.0.0")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
-    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material3:material3:1.5.0-alpha23")
     implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.compose.material:material-icons-extended")
 
@@ -116,4 +117,9 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.10.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+    testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation(platform("androidx.compose:compose-bom:2026.06.00"))
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
 }
