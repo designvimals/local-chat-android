@@ -679,6 +679,84 @@ h2 {
 
 .storage-toolbar-spacer { flex: 1 1 12px; }
 
+.file-filter-bar {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 9px;
+  align-items: center;
+}
+
+.file-filter-label {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 780;
+  letter-spacing: 0.02em;
+}
+
+.file-filter-scroll {
+  min-width: 0;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 3px;
+  scrollbar-width: none;
+  overscroll-behavior-inline: contain;
+}
+
+.file-filter-scroll::-webkit-scrollbar { display: none; }
+
+.file-filter-chip {
+  min-height: 38px;
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 8px 0 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.58);
+  font-size: 0.78rem;
+  font-weight: 740;
+}
+
+.file-filter-chip.active {
+  border-color: transparent;
+  color: white;
+  background: var(--evergreen);
+  box-shadow: var(--direct);
+}
+
+.file-filter-count {
+  min-width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  padding: 0 6px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--muted);
+  background: rgba(23, 32, 29, 0.07);
+  font-size: 0.69rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.file-filter-chip.active .file-filter-count {
+  color: white;
+  background: rgba(255, 255, 255, 0.17);
+}
+
+.filtered-empty {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+}
+
 .selection-toolbar {
   width: 100%;
   display: grid;
@@ -883,6 +961,8 @@ h2 {
   .connection-banner { margin: 10px 12px 0; }
   .bulk-action-group { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .bulk-download-button { padding-inline: 10px; }
+  .file-filter-bar { grid-template-columns: 1fr; gap: 2px; }
+  .file-filter-label { min-height: 28px; }
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -895,7 +975,8 @@ h2 {
   .send-button,
   .primary-button,
   .rail-button,
-  .file-row {
+  .file-row,
+  .file-filter-chip {
     transition: transform 140ms ease, background-color 140ms ease, border-color 140ms ease;
   }
 

@@ -11,6 +11,7 @@
     "dev:backend": "npm --workspace backend run dev",
     "dev:web": "npm --workspace web run dev",
     "build": "npm --workspace shared/api-contracts run build && npm --workspace backend run build && npm --workspace web run build",
-    "check": "npm --workspace shared/api-contracts run check && npm --workspace backend run check && npm --workspace web run check"
+    "check": "npm --workspace shared/api-contracts run check && npm --workspace backend run check && npm --workspace web run check",
+    "test": "npm --workspace web run test"
   }
 }
