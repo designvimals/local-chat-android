@@ -1,6 +1,7 @@
 import { zip, type AsyncZippable } from "fflate";
-import { ArrowLeft, Download, Home, ListChecks, RefreshCw, X } from "lucide-react";
+import { ArrowLeft, Download, Home, ListChecks, ListFilter, RefreshCw, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { categorizeFile, fileFilterOptions, fileMatchesFilter, type FileFilter } from "../lib/fileFilters";
 import type { RelayClient } from "../lib/relay";
 import type { FileItem, StorageListResponse } from "../types/api";
 import { FileRow } from "./FileRow";
@@ -28,6 +29,7 @@ export function StoragePanel({ relay, fullScreen = false, onClose }: StoragePane
   const [items, setItems] = useState<FileItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [downloadingPath, setDownloadingPath] = useState<string | null>(null);
+  const [fileFilter, setFileFilter] = useState<FileFilter>("all");
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(() => new Set());
   const [bulkProgress, setBulkProgress] = useState<BulkProgress | null>(null);
@@ -37,7 +39,29 @@ export function StoragePanel({ relay, fullScreen = false, onClose }: StoragePane
   const breadcrumb = useMemo(() => path === "/"
     ? ["Shared folders"]
     : ["Shared folders", ...path.split("/").filter(Boolean)], [path]);
-  const files = useMemo(() => items.filter((item) => item.type === "file"), [items]);
+  const allFiles = useMemo(() => items.filter((item) => item.type === "file"), [items]);
+  const filteredItems = useMemo(
+    () => items.filter((item) => fileMatchesFilter(item, fileFilter)),
+    [fileFilter, items]
+  );
+  const files = useMemo(
+    () => filteredItems.filter((item) => item.type === "file"),
+    [filteredItems]
+  );
+  const filterCounts = useMemo(() => {
+    const counts: Record<FileFilter, number> = {
+      all: allFiles.length,
+      images: 0,
+      videos: 0,
+      audio: 0,
+      documents: 0,
+      archives: 0,
+      apps: 0,
+      other: 0
+    };
+    for (const file of allFiles) counts[categorizeFile(file)] += 1;
+    return counts;
+  }, [allFiles]);
   const selectedFiles = useMemo(
     () => files.filter((item) => selectedPaths.has(item.path)),
     [files, selectedPaths]
@@ -267,6 +291,33 @@ export function StoragePanel({ relay, fullScreen = false, onClose }: StoragePane
             </div>
           </div>
         )}
+        {!selectionMode && allFiles.length > 0 ? (
+          <div className="file-filter-bar">
+            <span className="file-filter-label" aria-hidden>
+              <ListFilter size={16} />
+              <span>Type</span>
+            </span>
+            <div className="file-filter-scroll" role="group" aria-label="Filter files by type">
+              {fileFilterOptions.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={fileFilter === option.value ? "file-filter-chip active" : "file-filter-chip"}
+                  aria-pressed={fileFilter === option.value}
+                  onClick={() => setFileFilter(option.value)}
+                >
+                  <span>{option.label}</span>
+                  <span
+                    className="file-filter-count"
+                    aria-label={`${filterCounts[option.value]} ${filterCounts[option.value] === 1 ? "file" : "files"}`}
+                  >
+                    {filterCounts[option.value]}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {bulkProgress ? (
@@ -284,9 +335,15 @@ export function StoragePanel({ relay, fullScreen = false, onClose }: StoragePane
       {loading ? <div className="storage-state" role="status">Loading storage…</div> : null}
       {!loading && error ? <div className="storage-state warning" role="status">{error}</div> : null}
       {!loading && !error && items.length === 0 ? <div className="storage-state" role="status">This folder is empty.</div> : null}
-      {!loading && !error && items.length > 0 ? (
+      {!loading && !error && items.length > 0 && filteredItems.length === 0 ? (
+        <div className="storage-state filtered-empty" role="status">
+          <span>No {fileFilterOptions.find((option) => option.value === fileFilter)?.label.toLowerCase()} in this folder.</span>
+          <button type="button" className="soft-button" onClick={() => setFileFilter("all")}>Show all files</button>
+        </div>
+      ) : null}
+      {!loading && !error && filteredItems.length > 0 ? (
         <ul className="file-list">
-          {items.map((item) => (
+          {filteredItems.map((item) => (
             <FileRow
               key={item.path}
               item={item}
