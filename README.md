@@ -15,6 +15,27 @@ Android saves the transcript as newline-delimited JSON in an app-private `messag
 
 The relay can see traffic while forwarding it. HTTPS/WSS encrypts the network path, but this version is not end-to-end encrypted from browser to phone.
 
+Images and other attachments are forwarded as live chunks only. The relay does not store the files,
+queue them for offline delivery, or write them to a database. Each connected client keeps its own
+local copy after receiving an attachment.
+
+## Local-only testing app
+
+The long-lived `testing` branch includes a side-by-side sandbox named `testing _001`. It uses the
+package ID `com.example.privatevault.testing`, has a bug launcher icon, and removes internet,
+pairing, foreground-service, notification, and broad storage permissions. Messages and attachments
+remain inside this sandbox app and never connect to the relay.
+
+Build it locally with:
+
+```powershell
+.\build-testing-apk.bat
+```
+
+The APK is written to `android/app/build/outputs/apk/sandbox/app-sandbox.apk`. Pushes to the
+`testing` branch also produce a short-lived `testing_001` artifact in GitHub Actions without
+creating a production release.
+
 ## Required public setup
 
 Different-location use requires a stable public host that supports long-lived WebSockets. Deploy the repository's `Dockerfile` and configure:

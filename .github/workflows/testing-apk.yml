@@ -1,0 +1,39 @@
+name: Local-only testing APK
+
+on:
+  push:
+    branches:
+      - testing
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-testing-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out testing source
+        uses: actions/checkout@v7
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+          cache-dependency-path: android/**/*.gradle*
+
+      - name: Build local-only sandbox
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleSandbox
+
+      - name: Upload testing _001 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: testing_001
+          path: android/app/build/outputs/apk/sandbox/app-sandbox.apk
+          if-no-files-found: error
+          retention-days: 14

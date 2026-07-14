@@ -30,6 +30,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.privatevault.data.local.SettingsStore
 import com.example.privatevault.data.local.ThemePreference
+import com.example.privatevault.BuildConfig
 import com.example.privatevault.R
 import com.example.privatevault.attachment.AttachmentManager
 import com.example.privatevault.data.repository.ChatRepository
@@ -85,6 +86,7 @@ fun PrivateVaultApp(
     val pairingAvailable by pairingViewModel.pairingAvailable.collectAsState()
     val backendRegistration by registrationState.collectAsState()
     val update by availableUpdate.collectAsState()
+    val appReady = onboardingComplete == true || BuildConfig.LOCAL_ONLY
     val completeOnboarding: (Boolean) -> Unit = { granted ->
         onboardingViewModel.complete(granted) {
             onStorageSharingChanged(granted)
@@ -124,13 +126,15 @@ fun PrivateVaultApp(
         }
     }
 
-    LaunchedEffect(onboardingComplete) {
-        if (onboardingComplete == true && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+    LaunchedEffect(onboardingComplete, BuildConfig.LOCAL_ONLY) {
+        if (BuildConfig.LOCAL_ONLY && onboardingComplete == false) {
+            settingsStore.completeOnboarding(storagePermissionGranted = false)
+        } else if (onboardingComplete == true && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
 
-    if (onboardingComplete == false) {
+    if (onboardingComplete == false && !BuildConfig.LOCAL_ONLY) {
         OnboardingScreen(
             onRequestStorage = {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -147,12 +151,13 @@ fun PrivateVaultApp(
             },
             modifier = modifier
         )
-    } else if (onboardingComplete == true) {
+    } else if (appReady) {
         when (destination) {
             MainDestination.Chat -> ChatScreen(
                 viewModel = chatViewModel,
                 pairingCode = pairingCode,
-                pairingAvailable = pairingAvailable,
+                pairingAvailable = pairingAvailable && !BuildConfig.LOCAL_ONLY,
+                localOnly = BuildConfig.LOCAL_ONLY,
                 registrationState = backendRegistration,
                 onRetryRegistration = onRetryRegistration,
                 onOpenSettings = { destination = MainDestination.Settings },
@@ -176,6 +181,7 @@ fun PrivateVaultApp(
             )
             MainDestination.Settings -> SettingsScreen(
                 onBack = { destination = MainDestination.Chat },
+                localOnly = BuildConfig.LOCAL_ONLY,
                 onOpenPairing = {
                     pairingViewModel.refresh()
                     destination = MainDestination.Pairing

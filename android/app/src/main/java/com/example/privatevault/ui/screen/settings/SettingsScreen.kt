@@ -52,6 +52,7 @@ import kotlinx.coroutines.launch
 fun SettingsScreen(
     onBack: () -> Unit,
     onOpenPairing: () -> Unit,
+    localOnly: Boolean = false,
     onBackupNow: suspend () -> Result<String>,
     onResetDebugKey: (String) -> Result<Unit>,
     themePreference: ThemePreference,
@@ -118,7 +119,7 @@ fun SettingsScreen(
                     }
                 }
             }
-            Card(modifier = Modifier.fillMaxWidth()) {
+            if (!localOnly) Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(18.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)

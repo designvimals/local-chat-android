@@ -113,13 +113,20 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         appLockManager.onAppForegrounded()
         lifecycleScope.launch {
+            if (BuildConfig.LOCAL_ONLY) {
+                if (!settingsStore.onboardingComplete.first()) {
+                    settingsStore.completeOnboarding(storagePermissionGranted = false)
+                }
+                notifier.markInactive()
+                return@launch
+            }
             val storageAccessGranted = hasStorageAccess(this@MainActivity)
             settingsStore.setStoragePermissionGranted(storageAccessGranted)
             if (settingsStore.onboardingComplete.first()) {
                 applySharingState(settingsStore.storageSharingEnabled.first() && storageAccessGranted)
             }
         }
-        lifecycleScope.launch {
+        if (!BuildConfig.LOCAL_ONLY) lifecycleScope.launch {
             val update = GithubUpdateChecker.findAvailableUpdate()
             availableUpdate.value = update?.takeUnless { it.version == dismissedUpdateVersion }
         }
@@ -142,6 +149,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun applySharingState(enabled: Boolean) {
+        if (BuildConfig.LOCAL_ONLY) {
+            notifier.markInactive()
+            return
+        }
         lifecycleScope.launch {
             withContext(Dispatchers.IO) {
                 val storageAvailable = enabled && hasStorageAccess(this@MainActivity)
@@ -151,6 +162,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun restartRelay() {
+        if (BuildConfig.LOCAL_ONLY) return
         lifecycleScope.launch {
             backendClient.restartConnection()
             val storageAvailable = settingsStore.storageSharingEnabled.first() &&
@@ -160,6 +172,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun restartPeerRelay() {
+        if (BuildConfig.LOCAL_ONLY) return
         lifecycleScope.launch {
             peerRelayClient.restartConnection()
         }

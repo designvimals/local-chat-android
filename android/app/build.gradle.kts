@@ -57,11 +57,20 @@ android {
 
         buildConfigField("String", "BACKEND_URL", "\"$backendUrl\"")
         buildConfigField("String", "REGISTRATION_KEY", "\"$registrationKey\"")
+        buildConfigField("boolean", "LOCAL_ONLY", "false")
     }
 
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    buildTypes.create("sandbox") {
+        initWith(buildTypes.getByName("debug"))
+        matchingFallbacks += listOf("debug")
+        applicationIdSuffix = ".testing"
+        versionNameSuffix = "-testing.001"
+        buildConfigField("boolean", "LOCAL_ONLY", "true")
     }
 
     val releaseKeystorePath = providers.environmentVariable("ANDROID_KEYSTORE_PATH").orNull

@@ -164,6 +164,7 @@ fun ChatScreen(
     viewModel: ChatViewModel,
     pairingCode: String,
     pairingAvailable: Boolean,
+    localOnly: Boolean = false,
     registrationState: BackendRegistrationState,
     onRetryRegistration: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -218,6 +219,7 @@ fun ChatScreen(
                     remoteTyping = remoteTyping,
                     pairingCode = pairingCode,
                     pairingAvailable = pairingAvailable,
+                    localOnly = localOnly,
                     registrationState = registrationState,
                     onRetryRegistration = onRetryRegistration,
                     onOpenSettings = onOpenSettings,
@@ -279,6 +281,7 @@ private fun ConversationScaffold(
     remoteTyping: Boolean,
     pairingCode: String,
     pairingAvailable: Boolean,
+    localOnly: Boolean,
     registrationState: BackendRegistrationState,
     onRetryRegistration: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -386,6 +389,7 @@ private fun ConversationScaffold(
                 viewerConnected = viewerConnected,
                 remoteTyping = remoteTyping,
                 registrationState = registrationState,
+                localOnly = localOnly,
                 onOpenSettings = onOpenSettings,
                 selectedCount = selectedIds.size,
                 onClearSelection = ::clearSelection
@@ -581,11 +585,13 @@ private fun ExpressiveConversationHeader(
     viewerConnected: Boolean,
     remoteTyping: Boolean,
     registrationState: BackendRegistrationState,
+    localOnly: Boolean,
     onOpenSettings: () -> Unit,
     selectedCount: Int,
     onClearSelection: () -> Unit
 ) {
     val status = when {
+        localOnly -> stringResource(R.string.app_name)
         remoteTyping -> stringResource(R.string.typing_indicator, stringResource(R.string.contact_name))
         viewerConnected -> stringResource(R.string.status_connected)
         registrationState is BackendRegistrationState.Registered -> stringResource(R.string.status_code_active)
@@ -614,7 +620,7 @@ private fun ExpressiveConversationHeader(
             ) {
                 Box(
                     Modifier.size(9.dp).clip(CircleShape).background(
-                        if (viewerConnected) MaterialTheme.colorScheme.primary
+                        if (viewerConnected || localOnly) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.outline
                     )
                 )
