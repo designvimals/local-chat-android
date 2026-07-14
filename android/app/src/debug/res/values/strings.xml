@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">testing _001</string>
+    <string name="empty_paired_title">Local testing space</string>
+    <string name="empty_paired_body">Messages and attachments stay only inside this testing app.</string>
+</resources>

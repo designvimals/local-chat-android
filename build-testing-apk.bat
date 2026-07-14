@@ -5,6 +5,11 @@ set "PROJECT_ROOT=%~dp0"
 set "ANDROID_DIR=%PROJECT_ROOT%android"
 set "APK_PATH=%ANDROID_DIR%\app\build\outputs\apk\sandbox\app-sandbox.apk"
 
+if exist "%ProgramFiles%\Android\Android Studio\jbr\bin\java.exe" (
+    set "JAVA_HOME=%ProgramFiles%\Android\Android Studio\jbr"
+    set "PATH=%ProgramFiles%\Android\Android Studio\jbr\bin;%PATH%"
+)
+
 echo Building the local-only testing _001 APK...
 echo.
 

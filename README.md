@@ -36,6 +36,11 @@ The APK is written to `android/app/build/outputs/apk/sandbox/app-sandbox.apk`. P
 `testing` branch also produce a short-lived `testing_001` artifact in GitHub Actions without
 creating a production release.
 
+For emulator development, open the `android` directory in Android Studio and select the shared
+`testing _001` run configuration. On this branch the normal `debug` variant has the same local-only
+package, label, and bug icon, so Shift+F10 builds, installs, and opens the testing app without
+replacing the production app.
+
 ## Required public setup
 
 Different-location use requires a stable public host that supports long-lived WebSockets. Deploy the repository's `Dockerfile` and configure:

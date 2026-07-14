@@ -1,3 +1,5 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
@@ -65,12 +67,15 @@ android {
         buildConfig = true
     }
 
-    buildTypes.create("sandbox") {
-        initWith(buildTypes.getByName("debug"))
-        matchingFallbacks += listOf("debug")
+    buildTypes.getByName("debug") {
         applicationIdSuffix = ".testing"
         versionNameSuffix = "-testing.001"
         buildConfigField("boolean", "LOCAL_ONLY", "true")
+    }
+
+    buildTypes.create("sandbox") {
+        initWith(buildTypes.getByName("debug"))
+        matchingFallbacks += listOf("debug")
     }
 
     val releaseKeystorePath = providers.environmentVariable("ANDROID_KEYSTORE_PATH").orNull
@@ -93,7 +98,12 @@ android {
 }
 
 kotlin {
-    jvmToolchain(17)
+    // Android Studio ships Java 21; compile Java/Kotlin 17 bytecode with that
+    // toolchain so Shift+F10 does not depend on a separate machine JDK.
+    jvmToolchain(21)
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_17)
+    }
 }
 
 dependencies {
