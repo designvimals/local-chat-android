@@ -54,6 +54,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.carousel.CarouselDefaults
 import androidx.compose.material3.carousel.HorizontalMultiBrowseCarousel
 import androidx.compose.material3.carousel.rememberCarouselState
 import androidx.compose.runtime.Composable
@@ -760,28 +761,46 @@ private fun MessageAttachments(
             imageModifier = imageModifier(images.single()),
             onImageClick = { onImageClick(images.single()) }
         )
-        else -> HorizontalMultiBrowseCarousel(
-            state = rememberCarouselState { images.size },
-            modifier = Modifier.fillMaxWidth().height(240.dp),
-            preferredItemWidth = 180.dp,
-            itemSpacing = 8.dp
-        ) { index ->
-            val attachment = images[index]
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .maskClip(RoundedCornerShape(23.dp)),
-                contentAlignment = Alignment.Center
-            ) {
-                ImageAttachmentContent(
-                    attachment = attachment,
-                    attachmentManager = attachmentManager,
-                    imageModifier = imageModifier(attachment),
-                    onImageClick = { onImageClick(attachment) },
-                    fillCarouselItem = true,
-                    position = index + 1,
-                    total = images.size
-                )
+        else -> {
+            val carouselState = rememberCarouselState { images.size }
+            val preferredItemWidth = remember(images) {
+                val knownAspects = images.mapNotNull { attachment ->
+                    val width = attachment.width ?: return@mapNotNull null
+                    val height = attachment.height ?: return@mapNotNull null
+                    if (width > 0 && height > 0) width.toDouble() / height else null
+                }
+                val representativeAspect = knownAspects.takeIf { it.isNotEmpty() }
+                    ?.average()
+                    ?.coerceIn(0.5, 1.0)
+                    ?: 0.75
+                (240.0 * representativeAspect).coerceIn(120.0, 180.0).dp
+            }
+            HorizontalMultiBrowseCarousel(
+                state = carouselState,
+                modifier = Modifier.fillMaxWidth().height(240.dp),
+                preferredItemWidth = preferredItemWidth,
+                itemSpacing = 8.dp,
+                flingBehavior = CarouselDefaults.multiBrowseFlingBehavior(carouselState)
+            ) { index ->
+                val attachment = images[index]
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .maskClip(RoundedCornerShape(23.dp))
+                        .clip(RoundedCornerShape(23.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerLowest),
+                    contentAlignment = Alignment.Center
+                ) {
+                    ImageAttachmentContent(
+                        attachment = attachment,
+                        attachmentManager = attachmentManager,
+                        imageModifier = imageModifier(attachment),
+                        onImageClick = { onImageClick(attachment) },
+                        fillCarouselItem = true,
+                        position = index + 1,
+                        total = images.size
+                    )
+                }
             }
         }
     }
@@ -814,8 +833,8 @@ private fun ImageAttachmentContent(
     }
     BoxWithConstraints(if (fillCarouselItem) Modifier.fillMaxSize() else Modifier) {
         val availableHeight = if (fillCarouselItem) maxHeight else 240.dp
-        val imageWidth = minOf(maxWidth, availableHeight * imageAspect)
-        val imageHeight = minOf(availableHeight, imageWidth / imageAspect)
+        val imageWidth = if (fillCarouselItem) maxWidth else minOf(maxWidth, availableHeight * imageAspect)
+        val imageHeight = if (fillCarouselItem) maxHeight else minOf(availableHeight, imageWidth / imageAspect)
         Box(
             Modifier
                 .size(width = imageWidth, height = imageHeight)

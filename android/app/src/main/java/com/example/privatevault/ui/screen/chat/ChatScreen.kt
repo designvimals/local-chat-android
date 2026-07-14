@@ -191,7 +191,11 @@ fun ChatScreen(
         }?.message?.id ?: presented.lastOrNull()?.message?.id
     }
 
-    SharedTransitionLayout(modifier.fillMaxSize()) {
+    SharedTransitionLayout(
+        modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+    ) {
         AnimatedContent(
             targetState = imageViewer,
             transitionSpec = { EnterTransition.None togetherWith ExitTransition.None },
