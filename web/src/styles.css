@@ -777,6 +777,13 @@ h2 {
 
 .storage-toolbar-spacer { flex: 1 1 12px; }
 
+.file-organize-controls {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+}
+
 .file-filter-bar {
   width: 100%;
   min-width: 0;
@@ -847,6 +854,42 @@ h2 {
 .file-filter-chip.active .file-filter-count {
   color: white;
   background: rgba(255, 255, 255, 0.17);
+}
+
+.file-sort-bar {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: max-content minmax(100px, 160px) max-content;
+  gap: 9px;
+  align-items: center;
+}
+
+.file-sort-select-shell { min-width: 0; }
+
+.file-sort-select-shell select,
+.file-sort-direction {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.72);
+  font-size: 0.78rem;
+  font-weight: 740;
+}
+
+.file-sort-select-shell select {
+  width: 100%;
+  padding: 0 30px 0 12px;
+}
+
+.file-sort-direction {
+  justify-self: start;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--evergreen);
 }
 
 .filtered-empty {
@@ -1061,6 +1104,7 @@ h2 {
   .bulk-download-button { padding-inline: 10px; }
   .file-filter-bar { grid-template-columns: 1fr; gap: 2px; }
   .file-filter-label { min-height: 28px; }
+  .file-sort-bar { grid-template-columns: max-content minmax(0, 1fr) max-content; }
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -1074,7 +1118,8 @@ h2 {
   .primary-button,
   .rail-button,
   .file-row,
-  .file-filter-chip {
+  .file-filter-chip,
+  .file-sort-direction {
     transition: transform 140ms ease, background-color 140ms ease, border-color 140ms ease;
   }
 

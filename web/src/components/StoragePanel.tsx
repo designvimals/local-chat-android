@@ -1,7 +1,15 @@
 import { zip, type AsyncZippable } from "fflate";
-import { ArrowLeft, Download, Home, ListChecks, ListFilter, RefreshCw, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowUp, ArrowUpDown, Download, Home, ListChecks, ListFilter, RefreshCw, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { categorizeFile, fileFilterOptions, fileMatchesFilter, type FileFilter } from "../lib/fileFilters";
+import {
+  defaultSortDirection,
+  fileSortOptions,
+  sortDirectionLabel,
+  sortFileItems,
+  type FileSort,
+  type FileSortDirection
+} from "../lib/fileSorting";
 import type { RelayClient } from "../lib/relay";
 import type { FileItem, StorageListResponse } from "../types/api";
 import { FileRow } from "./FileRow";
@@ -30,6 +38,8 @@ export function StoragePanel({ relay, fullScreen = false, onClose }: StoragePane
   const [loading, setLoading] = useState(true);
   const [downloadingPath, setDownloadingPath] = useState<string | null>(null);
   const [fileFilter, setFileFilter] = useState<FileFilter>("all");
+  const [fileSort, setFileSort] = useState<FileSort>("name");
+  const [sortDirection, setSortDirection] = useState<FileSortDirection>("ascending");
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(() => new Set());
   const [bulkProgress, setBulkProgress] = useState<BulkProgress | null>(null);
@@ -44,9 +54,13 @@ export function StoragePanel({ relay, fullScreen = false, onClose }: StoragePane
     () => items.filter((item) => fileMatchesFilter(item, fileFilter)),
     [fileFilter, items]
   );
+  const sortedItems = useMemo(
+    () => sortFileItems(filteredItems, fileSort, sortDirection),
+    [fileSort, filteredItems, sortDirection]
+  );
   const files = useMemo(
-    () => filteredItems.filter((item) => item.type === "file"),
-    [filteredItems]
+    () => sortedItems.filter((item) => item.type === "file"),
+    [sortedItems]
   );
   const filterCounts = useMemo(() => {
     const counts: Record<FileFilter, number> = {
@@ -292,29 +306,63 @@ export function StoragePanel({ relay, fullScreen = false, onClose }: StoragePane
           </div>
         )}
         {!selectionMode && allFiles.length > 0 ? (
-          <div className="file-filter-bar">
-            <span className="file-filter-label" aria-hidden>
-              <ListFilter size={16} />
-              <span>Type</span>
-            </span>
-            <div className="file-filter-scroll" role="group" aria-label="Filter files by type">
-              {fileFilterOptions.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={fileFilter === option.value ? "file-filter-chip active" : "file-filter-chip"}
-                  aria-pressed={fileFilter === option.value}
-                  onClick={() => setFileFilter(option.value)}
-                >
-                  <span>{option.label}</span>
-                  <span
-                    className="file-filter-count"
-                    aria-label={`${filterCounts[option.value]} ${filterCounts[option.value] === 1 ? "file" : "files"}`}
+          <div className="file-organize-controls">
+            <div className="file-filter-bar">
+              <span className="file-filter-label" aria-hidden>
+                <ListFilter size={16} />
+                <span>Type</span>
+              </span>
+              <div className="file-filter-scroll" role="group" aria-label="Filter files by type">
+                {fileFilterOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={fileFilter === option.value ? "file-filter-chip active" : "file-filter-chip"}
+                    aria-pressed={fileFilter === option.value}
+                    onClick={() => setFileFilter(option.value)}
                   >
-                    {filterCounts[option.value]}
-                  </span>
-                </button>
-              ))}
+                    <span>{option.label}</span>
+                    <span
+                      className="file-filter-count"
+                      aria-label={`${filterCounts[option.value]} ${filterCounts[option.value] === 1 ? "file" : "files"}`}
+                    >
+                      {filterCounts[option.value]}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="file-sort-bar">
+              <span className="file-filter-label" aria-hidden>
+                <ArrowUpDown size={16} />
+                <span>Sort</span>
+              </span>
+              <label className="file-sort-select-shell">
+                <span className="sr-only">Sort files by</span>
+                <select
+                  value={fileSort}
+                  onChange={(event) => {
+                    const nextSort = event.currentTarget.value as FileSort;
+                    setFileSort(nextSort);
+                    setSortDirection(defaultSortDirection(nextSort));
+                  }}
+                >
+                  {fileSortOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                className="file-sort-direction"
+                onClick={() => setSortDirection((current) => current === "ascending" ? "descending" : "ascending")}
+                aria-label={`Sort direction: ${sortDirectionLabel(fileSort, sortDirection)}`}
+              >
+                {sortDirection === "ascending"
+                  ? <ArrowUp aria-hidden size={16} />
+                  : <ArrowDown aria-hidden size={16} />}
+                <span>{sortDirectionLabel(fileSort, sortDirection)}</span>
+              </button>
             </div>
           </div>
         ) : null}
@@ -343,7 +391,7 @@ export function StoragePanel({ relay, fullScreen = false, onClose }: StoragePane
       ) : null}
       {!loading && !error && filteredItems.length > 0 ? (
         <ul className="file-list">
-          {filteredItems.map((item) => (
+          {sortedItems.map((item) => (
             <FileRow
               key={item.path}
               item={item}
