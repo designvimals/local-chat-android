@@ -10,6 +10,7 @@ import {
 } from "../lib/downloadQueue";
 import {
   collectDirectoryFileNames,
+  collectSelectedFileNames,
   filesMissingByName,
   type ReadableDirectoryEntry
 } from "../lib/directoryScan";
@@ -47,6 +48,49 @@ type DirectoryPickerWindow = Window & {
     startIn?: "downloads";
   }) => Promise<ReadableDirectoryEntry>;
 };
+
+interface SelectedDirectoryFiles {
+  directoryName: string;
+  files: File[];
+}
+
+function selectDirectoryFiles(): Promise<SelectedDirectoryFiles> {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = true;
+    input.setAttribute("webkitdirectory", "");
+    input.setAttribute("directory", "");
+    input.style.display = "none";
+
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      input.remove();
+      callback();
+    };
+
+    input.addEventListener("change", () => {
+      const files = Array.from(input.files ?? []);
+      if (files.length === 0) {
+        finish(() => reject(new DOMException("Folder selection cancelled.", "AbortError")));
+        return;
+      }
+
+      const firstRelativePath = files[0]?.webkitRelativePath ?? "";
+      const directoryName = firstRelativePath.split("/")[0] || "selected folder";
+      finish(() => resolve({ directoryName, files }));
+    }, { once: true });
+
+    input.addEventListener("cancel", () => {
+      finish(() => reject(new DOMException("Folder selection cancelled.", "AbortError")));
+    }, { once: true });
+
+    document.body.append(input);
+    input.click();
+  });
+}
 
 const RECEIVER_BATCH_SIZE = 3;
 const ZIP_PART_SIZE = 5;
@@ -289,38 +333,52 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
   async function handleDownloadRemaining() {
     if (selectedFiles.length === 0 || bulkProgress || pendingBatch) return;
     const picker = (window as DirectoryPickerWindow).showDirectoryPicker;
-    if (!picker) {
-      setError("Download remaining requires desktop Chrome or Edge on a secure HTTPS page.");
-      return;
-    }
-
     const selection = [...selectedFiles];
     setError(null);
     setNotice(null);
     try {
-      const directory = await picker.call(window, {
-        id: "between-downloads-folder",
-        mode: "read",
-        startIn: "downloads"
-      });
-      setBulkProgress({
-        completed: 0,
-        total: selection.length,
-        label: `Checking ${directory.name} and its subfolders…`,
-        phase: "scanning"
-      });
-      const diskNames = await collectDirectoryFileNames(directory, (fileCount) => {
+      let directoryName: string;
+      let diskNames: Set<string>;
+
+      const updateScanProgress = (fileCount: number) => {
         setBulkProgress({
           completed: 0,
           total: selection.length,
           label: `${new Intl.NumberFormat().format(fileCount)} local filenames checked…`,
           phase: "scanning"
         });
-      });
+      };
+
+      if (picker) {
+        const directory = await picker.call(window, {
+          id: "between-downloads-folder",
+          mode: "read",
+          startIn: "downloads"
+        });
+        directoryName = directory.name;
+        setBulkProgress({
+          completed: 0,
+          total: selection.length,
+          label: `Checking ${directoryName} and its subfolders…`,
+          phase: "scanning"
+        });
+        diskNames = await collectDirectoryFileNames(directory, updateScanProgress);
+      } else {
+        const directory = await selectDirectoryFiles();
+        directoryName = directory.directoryName;
+        setBulkProgress({
+          completed: 0,
+          total: selection.length,
+          label: `Checking ${directoryName} and its subfolders…`,
+          phase: "scanning"
+        });
+        diskNames = collectSelectedFileNames(directory.files, updateScanProgress);
+      }
+
       const remaining = filesMissingByName(selection, diskNames);
       const skipped = selection.length - remaining.length;
       if (remaining.length === 0) {
-        setNotice(`All ${selection.length} selected filenames already exist in ${directory.name}.`);
+        setNotice(`All ${selection.length} selected filenames already exist in ${directoryName}.`);
         leaveSelectionMode();
         return;
       }
@@ -330,7 +388,7 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
       setPendingBatch(batch);
       await startOrResumeBatch(
         batch,
-        `Downloaded ${remaining.length} missing files and skipped ${skipped} filenames already found in ${directory.name}.`
+        `Downloaded ${remaining.length} missing files and skipped ${skipped} filenames already found in ${directoryName}.`
       );
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === "AbortError") {
