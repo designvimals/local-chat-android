@@ -55,10 +55,10 @@ jobs:
 
       - name: Prepare release asset
         shell: bash
-        run: cp android/app/build/outputs/apk/release/app-release.apk test.apk
+        run: cp android/app/build/outputs/apk/release/app-release.apk "test-app-${GITHUB_REF_NAME}.apk"
 
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
-        run: gh release create "$GITHUB_REF_NAME" test.apk --title "Test App $GITHUB_REF_NAME" --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" "test-app-${GITHUB_REF_NAME}.apk" --title "Test App $GITHUB_REF_NAME" --generate-notes
