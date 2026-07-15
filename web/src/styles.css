@@ -922,6 +922,7 @@ h2 {
 .bulk-action-group {
   grid-column: 1 / -1;
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
 }
@@ -1110,6 +1111,7 @@ h2 {
   .send-button span { display: none; }
   .connection-banner { margin: 10px 12px 0; }
   .bulk-action-group { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .bulk-action-group .bulk-download-button:first-child { grid-column: 1 / -1; }
   .bulk-download-button { padding-inline: 10px; }
   .file-filter-bar { grid-template-columns: 1fr; gap: 2px; }
   .file-filter-label { min-height: 28px; }

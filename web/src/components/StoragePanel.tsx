@@ -1,5 +1,5 @@
 import { zip, type AsyncZippable } from "fflate";
-import { ArrowDown, ArrowLeft, ArrowUp, ArrowUpDown, Download, Home, ListChecks, ListFilter, RefreshCw, RotateCcw, Trash2, WifiOff, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowUp, ArrowUpDown, Download, FolderSearch, Home, ListChecks, ListFilter, RefreshCw, RotateCcw, Trash2, WifiOff, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   clearDownloadBatch,
@@ -8,6 +8,11 @@ import {
   saveDownloadBatch,
   type DownloadBatch
 } from "../lib/downloadQueue";
+import {
+  collectDirectoryFileNames,
+  filesMissingByName,
+  type ReadableDirectoryEntry
+} from "../lib/directoryScan";
 import { categorizeFile, fileFilterOptions, fileMatchesFilter, type FileFilter } from "../lib/fileFilters";
 import {
   defaultSortDirection,
@@ -32,8 +37,16 @@ interface BulkProgress {
   completed: number;
   total: number;
   label: string;
-  phase: "downloading" | "packing";
+  phase: "downloading" | "packing" | "scanning";
 }
+
+type DirectoryPickerWindow = Window & {
+  showDirectoryPicker?: (options?: {
+    id?: string;
+    mode?: "read";
+    startIn?: "downloads";
+  }) => Promise<ReadableDirectoryEntry>;
+};
 
 const RECEIVER_BATCH_SIZE = 3;
 const ZIP_PART_SIZE = 5;
@@ -227,7 +240,7 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
     else await downloadZipBatch(batch);
   }
 
-  async function startOrResumeBatch(batch: DownloadBatch) {
+  async function startOrResumeBatch(batch: DownloadBatch, successNotice?: string) {
     if (bulkProgress) return;
     setError(null);
     setNotice(null);
@@ -236,13 +249,13 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
       clearDownloadBatch(queueOwnerId);
       setPendingBatch(null);
       const parts = zipParts(batch.files);
-      setNotice(
+      setNotice(successNotice ?? (
         batch.mode === "individual"
           ? `Finished ${batch.files.length} file downloads. If only one appears, allow multiple downloads in your browser.`
           : parts.length > 1
             ? `Downloaded ${batch.files.length} files in ${parts.length} smaller ZIP parts.`
             : `Downloaded ${batch.files.length} files as ${archiveName(batch.folderPath, 1, 1)}.`
-      );
+      ));
       leaveSelectionMode();
     } catch (caught) {
       const saved = loadDownloadBatch(queueOwnerId) ?? batch;
@@ -271,6 +284,63 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
     saveDownloadBatch(queueOwnerId, batch);
     setPendingBatch(batch);
     await startOrResumeBatch(batch);
+  }
+
+  async function handleDownloadRemaining() {
+    if (selectedFiles.length === 0 || bulkProgress || pendingBatch) return;
+    const picker = (window as DirectoryPickerWindow).showDirectoryPicker;
+    if (!picker) {
+      setError("Download remaining requires desktop Chrome or Edge on a secure HTTPS page.");
+      return;
+    }
+
+    const selection = [...selectedFiles];
+    setError(null);
+    setNotice(null);
+    try {
+      const directory = await picker.call(window, {
+        id: "between-downloads-folder",
+        mode: "read",
+        startIn: "downloads"
+      });
+      setBulkProgress({
+        completed: 0,
+        total: selection.length,
+        label: `Checking ${directory.name} and its subfolders…`,
+        phase: "scanning"
+      });
+      const diskNames = await collectDirectoryFileNames(directory, (fileCount) => {
+        setBulkProgress({
+          completed: 0,
+          total: selection.length,
+          label: `${new Intl.NumberFormat().format(fileCount)} local filenames checked…`,
+          phase: "scanning"
+        });
+      });
+      const remaining = filesMissingByName(selection, diskNames);
+      const skipped = selection.length - remaining.length;
+      if (remaining.length === 0) {
+        setNotice(`All ${selection.length} selected filenames already exist in ${directory.name}.`);
+        leaveSelectionMode();
+        return;
+      }
+
+      const batch = createDownloadBatch("individual", path, remaining);
+      saveDownloadBatch(queueOwnerId, batch);
+      setPendingBatch(batch);
+      await startOrResumeBatch(
+        batch,
+        `Downloaded ${remaining.length} missing files and skipped ${skipped} filenames already found in ${directory.name}.`
+      );
+    } catch (caught) {
+      if (caught instanceof DOMException && caught.name === "AbortError") {
+        setNotice("Folder selection cancelled. Nothing was downloaded.");
+      } else {
+        setError(caught instanceof Error ? caught.message : "Could not scan the selected folder.");
+      }
+    } finally {
+      setBulkProgress(null);
+    }
   }
 
   function discardPendingBatch() {
@@ -339,6 +409,15 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
               <button
                 type="button"
                 className="bulk-download-button"
+                onClick={() => void handleDownloadRemaining()}
+                disabled={selectedFiles.length === 0 || bulkProgress !== null || pendingBatch !== null}
+              >
+                <FolderSearch aria-hidden size={16} />
+                <span>Download remaining</span>
+              </button>
+              <button
+                type="button"
+                className="bulk-download-button secondary"
                 onClick={() => void handleIndividualDownloads()}
                 disabled={selectedFiles.length === 0 || bulkProgress !== null || pendingBatch !== null}
               >
@@ -423,10 +502,18 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
         {bulkProgress ? (
           <div className="bulk-progress" role="status" aria-live="polite">
             <div>
-              <strong>{bulkProgress.phase === "packing" ? "Preparing download" : `Downloading ${bulkProgress.completed + 1} of ${bulkProgress.total}`}</strong>
+              <strong>
+                {bulkProgress.phase === "packing"
+                  ? "Preparing download"
+                  : bulkProgress.phase === "scanning"
+                    ? "Scanning chosen folder"
+                    : `Downloading ${bulkProgress.completed + 1} of ${bulkProgress.total}`}
+              </strong>
               <span>{bulkProgress.label}</span>
             </div>
-            <progress max={bulkProgress.total} value={bulkProgress.completed} />
+            {bulkProgress.phase === "scanning"
+              ? <progress />
+              : <progress max={bulkProgress.total} value={bulkProgress.completed} />}
           </div>
         ) : null}
 
