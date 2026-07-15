@@ -95,6 +95,7 @@ function selectDirectoryFiles(): Promise<SelectedDirectoryFiles> {
 const RECEIVER_BATCH_SIZE = 3;
 const ZIP_PART_SIZE = 5;
 const ZIP_PART_BYTES = 64 * 1024 * 1024;
+const STORAGE_LIST_TIMEOUT_MS = 2 * 60_000;
 
 export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose }: StoragePanelProps) {
   const [path, setPath] = useState("/");
@@ -152,7 +153,11 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
     setLoading(true);
     setError(null);
     try {
-      const response = await relay.request<StorageListResponse>("storage.list", { path });
+      const response = await relay.request<StorageListResponse>(
+        "storage.list",
+        { path },
+        STORAGE_LIST_TIMEOUT_MS
+      );
       setItems(response.items);
       setSelectedPaths((current) => {
         const visibleFiles = new Set(response.items.filter((item) => item.type === "file").map((item) => item.path));

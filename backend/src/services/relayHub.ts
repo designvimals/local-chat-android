@@ -238,6 +238,7 @@ export class RelayHub {
       clearTimeout(existing.timeout);
       this.pending.delete(parsed.data.requestId);
     }
+    const responseTimeoutMs = parsed.data.type === "storage.list" ? 150_000 : 120_000;
     const timeout = setTimeout(() => {
       this.pending.delete(parsed.data.requestId);
       this.send(socket, {
@@ -246,7 +247,7 @@ export class RelayHub {
         ok: false,
         error: "The phone did not answer in time."
       });
-    }, 120_000);
+    }, responseTimeoutMs);
     this.pending.set(parsed.data.requestId, { viewer: socket, deviceAccessToken: accessToken, timeout });
     this.send(device.socket, parsed.data);
   }
