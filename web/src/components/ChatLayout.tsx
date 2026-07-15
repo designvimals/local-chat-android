@@ -158,7 +158,12 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
   if (compactStorage) {
     return (
       <main id="main" className="mobile-storage-page">
-        <StoragePanel relay={relay} fullScreen onClose={() => navigate("/chat")} />
+        <StoragePanel
+          relay={relay}
+          queueOwnerId={session.viewerDeviceId}
+          fullScreen
+          onClose={() => navigate("/chat")}
+        />
       </main>
     );
   }
@@ -225,7 +230,13 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
         </div>
       </main>
 
-      {storageOpen ? <StoragePanel relay={relay} onClose={() => navigate("/chat")} /> : null}
+      {storageOpen ? (
+        <StoragePanel
+          relay={relay}
+          queueOwnerId={session.viewerDeviceId}
+          onClose={() => navigate("/chat")}
+        />
+      ) : null}
     </div>
   );
 }
