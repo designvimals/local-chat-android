@@ -21,6 +21,20 @@ enum class ThemePreference {
     }
 }
 
+enum class ChatBubblePalette {
+    Lavender,
+    Ocean,
+    Jade,
+    Coral,
+    Rose,
+    Amber;
+
+    companion object {
+        fun fromStored(value: String?): ChatBubblePalette =
+            entries.firstOrNull { it.name == value } ?: Lavender
+    }
+}
+
 class SettingsStore(private val context: Context) {
     val onboardingComplete: Flow<Boolean> = context.settingsDataStore.data.map { preferences ->
         preferences[Keys.OnboardingComplete] ?: false
@@ -40,6 +54,10 @@ class SettingsStore(private val context: Context) {
 
     val themePreference: Flow<ThemePreference> = context.settingsDataStore.data.map { preferences ->
         ThemePreference.fromStored(preferences[Keys.ThemePreference])
+    }
+
+    val chatBubblePalette: Flow<ChatBubblePalette> = context.settingsDataStore.data.map { preferences ->
+        ChatBubblePalette.fromStored(preferences[Keys.ChatBubblePalette])
     }
 
     suspend fun completeOnboarding(storagePermissionGranted: Boolean) {
@@ -74,11 +92,18 @@ class SettingsStore(private val context: Context) {
         }
     }
 
+    suspend fun setChatBubblePalette(palette: ChatBubblePalette) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[Keys.ChatBubblePalette] = palette.name
+        }
+    }
+
     private object Keys {
         val OnboardingComplete = booleanPreferencesKey("onboarding_complete")
         val StorageSharingEnabled = booleanPreferencesKey("storage_sharing_enabled")
         val StoragePermissionGranted = booleanPreferencesKey("storage_permission_granted")
         val ManuallyPaused = booleanPreferencesKey("manually_paused")
         val ThemePreference = stringPreferencesKey("theme_preference")
+        val ChatBubblePalette = stringPreferencesKey("chat_bubble_palette")
     }
 }

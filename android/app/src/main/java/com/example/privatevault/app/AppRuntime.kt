@@ -13,9 +13,12 @@ import com.example.privatevault.network.PeerRelayClient
 import com.example.privatevault.server.LocalServerManager
 import com.example.privatevault.server.PathResolver
 import com.example.privatevault.security.AppLockManager
+import com.example.privatevault.service.IncomingMessageNotifier
 
 /** Process-wide graph shared by the UI and the foreground connection service. */
 class AppRuntime(context: Context) {
+    val chatVisibilityTracker = ChatVisibilityTracker()
+    val incomingMessageNotifier = IncomingMessageNotifier(context)
     val appLockManager = AppLockManager(context)
     val settingsStore = SettingsStore(context)
     val tokenStore = TokenStore(context)
@@ -42,6 +45,7 @@ class AppRuntime(context: Context) {
         tokenStore = tokenStore,
         deviceRepository = deviceRepository,
         chatRepository = chatRepository,
-        attachmentManager = attachmentManager
+        attachmentManager = attachmentManager,
+        chatVisibilityTracker = chatVisibilityTracker
     )
 }

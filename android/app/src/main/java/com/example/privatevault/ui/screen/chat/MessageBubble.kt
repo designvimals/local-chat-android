@@ -7,6 +7,7 @@ package com.example.privatevault.ui.screen.chat
 
 import android.text.format.Formatter
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -61,6 +62,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -70,7 +72,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -103,11 +107,15 @@ import com.example.privatevault.model.MessageEmphasis
 import com.example.privatevault.model.MessageReaction
 import com.example.privatevault.model.canonicalAttachments
 import com.example.privatevault.ui.theme.ChatExpressiveTokens
+import com.example.privatevault.ui.theme.LocalChatBubbleColors
 import com.example.privatevault.util.TimeUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.PI
+import kotlin.math.sin
 
 private val ReactionChoices = listOf("❤️", "👍", "😂", "😮", "😢", "🔥")
 
@@ -139,6 +147,8 @@ fun MessageBubble(
     onImageClick: (ChatAttachment) -> Unit,
     imageModifier: @Composable (ChatAttachment) -> Modifier,
     attachmentManager: AttachmentManager,
+    playExpressiveOnAppear: Boolean,
+    expressiveMotionEnabled: Boolean,
     modifier: Modifier = Modifier
 ) {
     val haptics = LocalHapticFeedback.current
@@ -158,6 +168,34 @@ fun MessageBubble(
     val sender = if (isMine) stringResource(R.string.message_from_you)
     else stringResource(R.string.message_from_contact, stringResource(R.string.contact_name))
     val attachments = message.canonicalAttachments
+    val replayableExpressiveMessage = remember(
+        message.emphasisLevel,
+        message.text,
+        message.deletedAt,
+        attachments
+    ) {
+        MessageEmphasis.fromStored(message.emphasisLevel) == MessageEmphasis.Maximum &&
+            message.deletedAt == null &&
+            attachments.isEmpty() &&
+            singleEmojiOrNull(message.text) == null &&
+            message.text.length <= 34
+    }
+    var expressivePlaybackRequest by remember(message.id) { mutableIntStateOf(0) }
+    var entrancePlaybackConsumed by remember(message.id) { mutableStateOf(false) }
+    LaunchedEffect(playExpressiveOnAppear, expressiveMotionEnabled, replayableExpressiveMessage) {
+        if (
+            playExpressiveOnAppear &&
+            expressiveMotionEnabled &&
+            replayableExpressiveMessage &&
+            !entrancePlaybackConsumed
+        ) {
+            entrancePlaybackConsumed = true
+            expressivePlaybackRequest += 1
+        }
+    }
+    val replayEffectLabel = if (replayableExpressiveMessage) {
+        stringResource(R.string.replay_message_effect)
+    } else null
     val attachmentDescription = when {
         attachments.isEmpty() -> ""
         attachments.size == 1 -> attachments.single().let {
@@ -252,8 +290,12 @@ fun MessageBubble(
                         .clip(bubbleShape(isMine, groupedWithPrevious, groupedWithNext))
                         .combinedClickable(
                         role = Role.Button,
+                        onClickLabel = replayEffectLabel,
                         onClick = {
                             if (selectionMode) onToggleSelection()
+                            else if (replayableExpressiveMessage && expressiveMotionEnabled) {
+                                expressivePlaybackRequest += 1
+                            }
                             else if (message.status == "read") detailsVisible = !detailsVisible
                         },
                         onLongClick = {
@@ -277,7 +319,9 @@ fun MessageBubble(
                         onReplyQuoteClick = onReplyQuoteClick,
                         onImageClick = onImageClick,
                         imageModifier = imageModifier,
-                        attachmentManager = attachmentManager
+                        attachmentManager = attachmentManager,
+                        expressivePlaybackRequest = expressivePlaybackRequest,
+                        expressiveMotionEnabled = expressiveMotionEnabled
                     )
                 }
                 if (showContextMenu) {
@@ -324,7 +368,9 @@ private fun MessageSurface(
     onReplyQuoteClick: (String) -> Unit,
     onImageClick: (ChatAttachment) -> Unit,
     imageModifier: @Composable (ChatAttachment) -> Modifier,
-    attachmentManager: AttachmentManager
+    attachmentManager: AttachmentManager,
+    expressivePlaybackRequest: Int,
+    expressiveMotionEnabled: Boolean
 ) {
     val emphasis = MessageEmphasis.fromStored(message.emphasisLevel)
     val attachments = message.canonicalAttachments
@@ -362,7 +408,9 @@ private fun MessageSurface(
                 message.editedAt != null,
                 selected,
                 highlighted,
-                showDetails
+                showDetails,
+                expressivePlaybackRequest,
+                expressiveMotionEnabled
             )
         else -> ConventionalBubble(
             message,
@@ -405,6 +453,7 @@ private fun ConventionalBubble(
     attachmentManager: AttachmentManager
 ) {
     BoxWithConstraints {
+        val bubbleColors = LocalChatBubbleColors.current
         val metrics = messageVisualMetrics(
             message.text,
             emphasis.progress,
@@ -416,12 +465,12 @@ private fun ConventionalBubble(
             modifier = Modifier.widthIn(max = maxWidth * ChatExpressiveTokens.MessageMaxWidthFraction),
             color = when {
                 selected || highlighted -> selectedColor
-                isMine -> MaterialTheme.colorScheme.primaryContainer
-                else -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.68f)
+                isMine -> bubbleColors.outgoing
+                else -> bubbleColors.incoming
             },
             contentColor = if (selected || highlighted) MaterialTheme.colorScheme.onTertiaryContainer
-            else if (isMine) MaterialTheme.colorScheme.onPrimaryContainer
-            else MaterialTheme.colorScheme.onSecondaryContainer,
+            else if (isMine) bubbleColors.onOutgoing
+            else bubbleColors.onIncoming,
             shape = bubbleShape(isMine, groupedWithPrevious, groupedWithNext),
             tonalElevation = if (isMine) 1.dp else 0.dp
         ) {
@@ -574,9 +623,60 @@ private fun MaximumExpressiveMessage(
     edited: Boolean,
     selected: Boolean,
     highlighted: Boolean,
-    showDetails: Boolean
+    showDetails: Boolean,
+    playbackRequest: Int,
+    motionEnabled: Boolean
 ) {
     val colors = MaterialTheme.colorScheme
+    val chatColors = LocalChatBubbleColors.current
+    val shimmerProgress = remember { Animatable(0f) }
+    val twinkleProgress = remember { Animatable(0f) }
+    var playing by remember { mutableStateOf(false) }
+    LaunchedEffect(playbackRequest, motionEnabled) {
+        if (playbackRequest <= 0 || !motionEnabled) {
+            playing = false
+            return@LaunchedEffect
+        }
+        playing = true
+        try {
+            shimmerProgress.snapTo(-0.35f)
+            twinkleProgress.snapTo(0f)
+            coroutineScope {
+                launch {
+                    shimmerProgress.animateTo(
+                        targetValue = 1.35f,
+                        animationSpec = tween(durationMillis = 820, easing = LinearEasing)
+                    )
+                }
+                launch {
+                    twinkleProgress.animateTo(
+                        targetValue = 1f,
+                        animationSpec = tween(durationMillis = 820, easing = LinearEasing)
+                    )
+                }
+            }
+        } finally {
+            playing = false
+        }
+    }
+    val shimmerBrush = if (playing) {
+        val center = shimmerProgress.value * 520f
+        Brush.linearGradient(
+            colorStops = arrayOf(
+                0f to chatColors.expressiveStart,
+                0.38f to chatColors.expressiveEnd,
+                0.5f to Color.White.copy(alpha = 0.96f),
+                0.62f to chatColors.expressiveEnd,
+                1f to chatColors.expressiveStart
+            ),
+            start = Offset(center - 150f, -40f),
+            end = Offset(center + 150f, 190f)
+        )
+    } else {
+        Brush.linearGradient(listOf(chatColors.expressiveStart, chatColors.expressiveEnd))
+    }
+    val firstTwinkle = twinklePulse(twinkleProgress.value, delay = 0f)
+    val secondTwinkle = twinklePulse(twinkleProgress.value, delay = 0.28f)
     Surface(
         color = if (selected || highlighted) colors.tertiaryContainer
         else androidx.compose.ui.graphics.Color.Transparent,
@@ -588,23 +688,57 @@ private fun MaximumExpressiveMessage(
             horizontalAlignment = Alignment.End
         ) {
             Box(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-                Text("✦", Modifier.align(Alignment.TopEnd).offset(x = 8.dp, y = (-14).dp), fontSize = 24.sp, color = colors.tertiary)
+                Text(
+                    "✦",
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .offset(x = 8.dp, y = (-14).dp)
+                        .graphicsLayer {
+                            alpha = 0.72f + firstTwinkle * 0.28f
+                            val scale = 0.92f + firstTwinkle * 0.16f
+                            scaleX = scale
+                            scaleY = scale
+                            rotationZ = firstTwinkle * 7f
+                    },
+                    fontSize = 24.sp,
+                    color = chatColors.expressiveEnd
+                )
                 Text(
                     text,
                     style = TextStyle(
-                        brush = Brush.linearGradient(listOf(colors.primary, colors.tertiary)),
+                        brush = shimmerBrush,
                         fontFamily = MaterialTheme.typography.displayLarge.fontFamily,
                         fontWeight = FontWeight.Black,
                         fontSize = when { text.length <= 8 -> 68.sp; text.length <= 18 -> 54.sp; else -> 42.sp },
                         lineHeight = when { text.length <= 8 -> 72.sp; text.length <= 18 -> 58.sp; else -> 47.sp },
-                        shadow = Shadow(colors.primary.copy(alpha = 0.22f), blurRadius = 18f)
+                        shadow = Shadow(chatColors.expressiveStart.copy(alpha = 0.22f), blurRadius = 18f)
                     )
                 )
-                Text("✦", Modifier.align(Alignment.BottomStart).offset(x = (-13).dp, y = 12.dp), fontSize = 18.sp, color = colors.primary.copy(alpha = 0.72f))
+                Text(
+                    "✦",
+                    Modifier
+                        .align(Alignment.BottomStart)
+                        .offset(x = (-13).dp, y = 12.dp)
+                        .graphicsLayer {
+                            alpha = 0.58f + secondTwinkle * 0.3f
+                            val scale = 0.9f + secondTwinkle * 0.17f
+                            scaleX = scale
+                            scaleY = scale
+                            rotationZ = secondTwinkle * -8f
+                    },
+                    fontSize = 18.sp,
+                    color = chatColors.expressiveStart
+                )
             }
             MessageMeta(sentTime, readTime, status, isMine, edited, showDetails)
         }
     }
+}
+
+private fun twinklePulse(progress: Float, delay: Float): Float {
+    if (progress <= delay || progress >= 1f) return 0f
+    val localProgress = ((progress - delay) / (1f - delay)).coerceIn(0f, 1f)
+    return sin(localProgress * PI).toFloat().coerceAtLeast(0f)
 }
 
 @Composable

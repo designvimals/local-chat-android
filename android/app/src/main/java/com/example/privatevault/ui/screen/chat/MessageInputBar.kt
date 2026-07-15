@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.EmojiEmotions
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -80,7 +81,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -116,6 +116,7 @@ import com.example.privatevault.model.Message
 import com.example.privatevault.model.MessageEmphasis
 import com.example.privatevault.model.canonicalAttachments
 import com.example.privatevault.ui.theme.ChatExpressiveTokens
+import com.example.privatevault.ui.theme.LocalChatBubbleColors
 import kotlin.math.abs
 import kotlin.math.PI
 import kotlin.math.cos
@@ -467,10 +468,15 @@ private fun ComposerActionButton(
     description: String,
     onClick: () -> Unit
 ) {
+    val chatColors = LocalChatBubbleColors.current
     FilledTonalIconButton(
         onClick = onClick,
         modifier = Modifier.size(48.dp),
-        shape = CircleShape
+        shape = CircleShape,
+        colors = IconButtonDefaults.filledTonalIconButtonColors(
+            containerColor = chatColors.outgoing,
+            contentColor = chatColors.onOutgoing
+        )
     ) {
         Icon(icon, contentDescription = description, modifier = Modifier.size(25.dp))
     }
@@ -591,6 +597,7 @@ private fun EmphasisPreview(
     shakeOffsetDp: State<Float>,
     animationsEnabled: Boolean
 ) {
+    val chatColors = LocalChatBubbleColors.current
     val progress by animateFloatAsState(
         if (state.phase == SendInteractionPhase.Cancelling) 0f else state.progress,
         if (state.phase == SendInteractionPhase.Cancelling && animationsEnabled) spring(
@@ -638,8 +645,8 @@ private fun EmphasisPreview(
             Surface(
                 modifier = previewModifier,
                 shape = ChatExpressiveTokens.OutgoingBubbleShape,
-                color = MaterialTheme.colorScheme.primaryContainer,
-                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                color = chatColors.outgoing,
+                contentColor = chatColors.onOutgoing
             ) {
                 Text(
                     state.messageSnapshot,
@@ -674,6 +681,7 @@ private fun ExpressiveSendControl(
     touchSlopPx: Float,
     popScale: State<Float>
 ) {
+    val chatColors = LocalChatBubbleColors.current
     val latestMessage by rememberUpdatedState(message)
     val latestQuickSend by rememberUpdatedState(onQuickSend)
     val latestEmphasizedSend by rememberUpdatedState(onEmphasizedSend)
@@ -681,11 +689,6 @@ private fun ExpressiveSendControl(
     val latestEnterHold by rememberUpdatedState(onEnterHold)
     val latestPublish by rememberUpdatedState(publish)
     val sendDescription = stringResource(R.string.send_message_hint)
-    val activeContainer = lerp(
-        MaterialTheme.colorScheme.primary,
-        MaterialTheme.colorScheme.tertiary,
-        state.progress * 0.42f
-    )
     val scale = when (state.phase) {
         SendInteractionPhase.Pressed -> ChatExpressiveTokens.ButtonPressedScale
         SendInteractionPhase.Holding, SendInteractionPhase.Adjusting, SendInteractionPhase.AtMaximum ->
@@ -733,8 +736,8 @@ private fun ExpressiveSendControl(
                 onClick { if (enabled) { latestQuickSend(); true } else false }
             },
         shape = CircleShape,
-        color = activeContainer,
-        contentColor = MaterialTheme.colorScheme.onPrimary,
+        color = chatColors.outgoing,
+        contentColor = chatColors.onOutgoing,
         shadowElevation = 4.dp
     ) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -746,7 +749,7 @@ private fun ExpressiveSendControl(
             ) {
                 Canvas(Modifier.fillMaxSize().padding(4.dp)) {
                     drawArc(
-                        color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.76f),
+                        color = chatColors.onOutgoing.copy(alpha = 0.76f),
                         startAngle = -90f,
                         sweepAngle = 360f * state.progress,
                         useCenter = false,
@@ -874,7 +877,7 @@ private fun SendStarBurst(
 ) {
     if (!enabled || event == 0) return
     val progress = remember { Animatable(1f) }
-    val color = MaterialTheme.colorScheme.tertiary
+    val chatColors = LocalChatBubbleColors.current
     LaunchedEffect(event) {
         progress.snapTo(0f)
         progress.animateTo(1f, tween(durationMillis = 460))
@@ -891,7 +894,7 @@ private fun SendStarBurst(
             val starSize = size.minDimension * (0.085f - progress.value * 0.035f)
             drawPath(
                 path = sparklePath(starCenter, starSize.coerceAtLeast(2f)),
-                color = if (index % 2 == 0) color else androidx.compose.ui.graphics.Color.White
+                color = if (index % 2 == 0) chatColors.expressiveEnd else chatColors.expressiveStart
             )
         }
     }

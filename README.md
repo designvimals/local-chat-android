@@ -78,7 +78,14 @@ The PC launcher is not required after the relay/site is deployed and the APK is 
 1. Open Between on Android. On first launch, grant all-files access once and tap **Start chat**.
 2. The chat home screen shows a six-digit one-time code after the phone reaches the relay.
 3. Open `https://your-relay.example` from any location and enter that code.
-4. Chat and Files work whenever both devices overlap online.
+4. Chat and Files work whenever both devices overlap online. After the Android app has started its
+   foreground connection, closing its screen or swiping it from Recents keeps transfers available;
+   use the notification's **Pause files** action to stop remote file access.
+
+Bulk downloads are checkpointed in the paired browser after every completed file. ZIP downloads are
+checkpointed after every completed ZIP part. If a connection drops or the browser is reopened, the
+Files panel offers **Resume** and skips completed work. Android's explicit **Force stop** action still
+ends the foreground service until the app is opened again.
 
 The code is accepted only while the phone is connected and advertising it. It is consumed after one successful pairing. Create a replacement under **Settings → Pairing** for a new browser.
 

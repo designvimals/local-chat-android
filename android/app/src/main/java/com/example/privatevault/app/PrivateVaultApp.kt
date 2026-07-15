@@ -9,6 +9,7 @@ import android.os.Environment
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -29,6 +30,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.privatevault.data.local.SettingsStore
+import com.example.privatevault.data.local.ChatBubblePalette
 import com.example.privatevault.data.local.ThemePreference
 import com.example.privatevault.BuildConfig
 import com.example.privatevault.R
@@ -47,6 +49,7 @@ import com.example.privatevault.ui.screen.pairing.PairingViewModel
 import com.example.privatevault.ui.screen.settings.SettingsScreen
 import com.example.privatevault.ui.screen.storage.StorageBrowserScreen
 import com.example.privatevault.ui.screen.storage.StorageBrowserViewModel
+import com.example.privatevault.ui.theme.ProvideChatBubbleColors
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.StateFlow
 
@@ -69,6 +72,7 @@ fun PrivateVaultApp(
     onResetDebugKey: (String) -> Result<Unit>,
     themePreference: ThemePreference,
     onThemePreferenceChanged: (ThemePreference) -> Unit,
+    onChatVisibilityChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -76,6 +80,9 @@ fun PrivateVaultApp(
     val scope = rememberCoroutineScope()
     var pendingAttachments by remember { mutableStateOf<List<ChatAttachment>>(emptyList()) }
     val onboardingComplete: Boolean? by settingsStore.onboardingComplete.collectAsState(initial = null)
+    val chatBubblePalette: ChatBubblePalette by settingsStore.chatBubblePalette.collectAsState(
+        initial = ChatBubblePalette.Lavender
+    )
     var destination by rememberSaveable { mutableStateOf(MainDestination.Chat) }
 
     val onboardingViewModel = pocViewModel { OnboardingViewModel(settingsStore) }
@@ -87,6 +94,14 @@ fun PrivateVaultApp(
     val backendRegistration by registrationState.collectAsState()
     val update by availableUpdate.collectAsState()
     val appReady = onboardingComplete == true || BuildConfig.LOCAL_ONLY
+    val chatSelected = appReady && destination == MainDestination.Chat
+
+    DisposableEffect(chatSelected) {
+        onChatVisibilityChanged(chatSelected)
+        onDispose {
+            if (chatSelected) onChatVisibilityChanged(false)
+        }
+    }
     val completeOnboarding: (Boolean) -> Unit = { granted ->
         onboardingViewModel.complete(granted) {
             onStorageSharingChanged(granted)
@@ -152,7 +167,8 @@ fun PrivateVaultApp(
             modifier = modifier
         )
     } else if (appReady) {
-        when (destination) {
+        ProvideChatBubbleColors(chatBubblePalette) {
+            when (destination) {
             MainDestination.Chat -> ChatScreen(
                 viewModel = chatViewModel,
                 pairingCode = pairingCode,
@@ -190,6 +206,10 @@ fun PrivateVaultApp(
                 onResetDebugKey = onResetDebugKey,
                 themePreference = themePreference,
                 onThemePreferenceChanged = onThemePreferenceChanged,
+                chatBubblePalette = chatBubblePalette,
+                onChatBubblePaletteChanged = { palette ->
+                    scope.launch { settingsStore.setChatBubblePalette(palette) }
+                },
                 modifier = modifier
             )
             MainDestination.Pairing -> PairingScreen(
@@ -200,6 +220,7 @@ fun PrivateVaultApp(
                 onRetryRegistration = onRetryRegistration,
                 modifier = modifier
             )
+            }
         }
     }
 

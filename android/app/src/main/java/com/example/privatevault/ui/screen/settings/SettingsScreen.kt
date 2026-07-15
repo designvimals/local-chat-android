@@ -1,21 +1,34 @@
 package com.example.privatevault.ui.screen.settings
 
 import android.os.SystemClock
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -33,6 +46,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -43,8 +59,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.privatevault.BuildConfig
 import com.example.privatevault.R
+import com.example.privatevault.data.local.ChatBubblePalette
 import com.example.privatevault.data.local.ThemePreference
 import com.example.privatevault.ui.lock.DebugKeySetupDialog
+import com.example.privatevault.ui.theme.resolveChatBubbleColors
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -57,6 +75,8 @@ fun SettingsScreen(
     onResetDebugKey: (String) -> Result<Unit>,
     themePreference: ThemePreference,
     onThemePreferenceChanged: (ThemePreference) -> Unit,
+    chatBubblePalette: ChatBubblePalette,
+    onChatBubblePaletteChanged: (ChatBubblePalette) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val resources = LocalResources.current
@@ -112,6 +132,36 @@ fun SettingsScreen(
                                 onClick = { onThemePreferenceChanged(preference) },
                                 label = { Text(label) }
                             )
+                        }
+                    }
+                    HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                    Text(
+                        stringResource(R.string.chat_colors),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        stringResource(R.string.chat_colors_description),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        ChatBubblePalette.entries.chunked(2).forEach { palettes ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                palettes.forEach { palette ->
+                                    ChatBubblePaletteOption(
+                                        palette = palette,
+                                        label = paletteLabel(palette),
+                                        selected = chatBubblePalette == palette,
+                                        onClick = { onChatBubblePaletteChanged(palette) },
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                                if (palettes.size == 1) Spacer(Modifier.weight(1f))
+                            }
                         }
                     }
                     TextButton(onClick = { showFontLicense = true }) {
@@ -284,6 +334,94 @@ fun SettingsScreen(
         )
     }
 }
+
+@Composable
+private fun ChatBubblePaletteOption(
+    palette: ChatBubblePalette,
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val darkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val preview = palette.resolveChatBubbleColors(darkTheme)
+    val shape = RoundedCornerShape(20.dp)
+    Card(
+        modifier = modifier
+            .clip(shape)
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick),
+        shape = shape,
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer
+            else MaterialTheme.colorScheme.surfaceContainerLow
+        ),
+        border = BorderStroke(
+            width = if (selected) 2.dp else 1.dp,
+            color = if (selected) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.outlineVariant
+        )
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(9.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+            ) {
+                Text(label, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+                if (selected) {
+                    Icon(
+                        Icons.Default.Check,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Box(
+                    Modifier
+                        .width(66.dp)
+                        .height(25.dp)
+                        .clip(RoundedCornerShape(15.dp, 15.dp, 15.dp, 4.dp))
+                        .background(preview.incoming)
+                        .padding(horizontal = 10.dp),
+                    contentAlignment = androidx.compose.ui.Alignment.CenterStart
+                ) {
+                    Text("Hi", color = preview.onIncoming, style = MaterialTheme.typography.labelMedium)
+                }
+                Box(
+                    Modifier
+                        .width(76.dp)
+                        .height(25.dp)
+                        .align(androidx.compose.ui.Alignment.End)
+                        .clip(RoundedCornerShape(15.dp, 15.dp, 4.dp, 15.dp))
+                        .background(preview.outgoing)
+                        .padding(horizontal = 10.dp),
+                    contentAlignment = androidx.compose.ui.Alignment.CenterEnd
+                ) {
+                    Text("Hello", color = preview.onOutgoing, style = MaterialTheme.typography.labelMedium)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun paletteLabel(palette: ChatBubblePalette): String = stringResource(
+    when (palette) {
+        ChatBubblePalette.Lavender -> R.string.bubble_palette_lavender
+        ChatBubblePalette.Ocean -> R.string.bubble_palette_ocean
+        ChatBubblePalette.Jade -> R.string.bubble_palette_jade
+        ChatBubblePalette.Coral -> R.string.bubble_palette_coral
+        ChatBubblePalette.Rose -> R.string.bubble_palette_rose
+        ChatBubblePalette.Amber -> R.string.bubble_palette_amber
+    }
+)
 
 private const val DEBUG_KEY_RESET_TAPS = 7
 private const val DEBUG_KEY_TAP_WINDOW_MILLIS = 3_000L

@@ -191,6 +191,17 @@ fun ChatScreen(
             !it.isMine && it.message.status != "read" && it.message.deletedAt == null
         }?.message?.id ?: presented.lastOrNull()?.message?.id
     }
+    val latestIncomingUnreadId = visibleMessages.lastOrNull { message ->
+        message.senderDeviceId != currentDeviceId &&
+            message.status != "read" &&
+            message.deletedAt == null
+    }?.id
+
+    LaunchedEffect(initialPositioningComplete, latestIncomingUnreadId) {
+        if (initialPositioningComplete && latestIncomingUnreadId != null) {
+            viewModel.markIncomingRead()
+        }
+    }
 
     SharedTransitionLayout(
         modifier
@@ -510,7 +521,10 @@ private fun ConversationScaffold(
                             },
                             onImageClick = { attachment -> onImageClick(item.message, attachment) },
                             imageModifier = imageModifier,
-                            attachmentManager = attachmentManager
+                            attachmentManager = attachmentManager,
+                            playExpressiveOnAppear = animationsEnabled &&
+                                item.message.id == enteringMessageId,
+                            expressiveMotionEnabled = animationsEnabled
                         )
                     }
                 }

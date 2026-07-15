@@ -155,4 +155,15 @@
     <string name="theme_system">Follow system</string>
     <string name="theme_light">Light</string>
     <string name="app_version">App version</string>
+    <string name="notification_message_channel_name">Messages</string>
+    <string name="notification_message_title">New notification</string>
+    <string name="chat_colors">Chat colors</string>
+    <string name="chat_colors_description">Choose solid bubble colors for this device.</string>
+    <string name="bubble_palette_lavender">Lavender</string>
+    <string name="bubble_palette_ocean">Ocean</string>
+    <string name="bubble_palette_jade">Jade</string>
+    <string name="bubble_palette_coral">Coral</string>
+    <string name="bubble_palette_rose">Rose</string>
+    <string name="bubble_palette_amber">Amber</string>
+    <string name="replay_message_effect">Replay message effect</string>
 </resources>

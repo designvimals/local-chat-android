@@ -1,5 +1,6 @@
 package com.example.privatevault.service
 
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -23,19 +24,21 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
 /**
- * Owns every connection that must outlive the activity. Leaving the UI keeps
- * this service running; removing the app task from Recents stops it explicitly.
+ * Owns every connection that must outlive the activity. Leaving the UI or
+ * removing the app task from Recents keeps this foreground service running.
  */
 class StorageSharingForegroundService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var runtime: AppRuntime
     private var relayJob: Job? = null
     private var peerRelayJob: Job? = null
+    private var messageNotificationJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -77,14 +80,10 @@ class StorageSharingForegroundService : Service() {
         return START_STICKY
     }
 
-    override fun onTaskRemoved(rootIntent: Intent?) {
-        stopSelf()
-        super.onTaskRemoved(rootIntent)
-    }
-
     override fun onDestroy() {
         relayJob?.cancel()
         peerRelayJob?.cancel()
+        messageNotificationJob?.cancel()
         runBlocking(Dispatchers.IO) {
             runCatching { runtime.backendClient.restartConnection() }
             runCatching { runtime.peerRelayClient.restartConnection() }
@@ -97,6 +96,19 @@ class StorageSharingForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun ensureConnectionLoops() {
+        if (messageNotificationJob?.isActive != true) {
+            val policy = IncomingMessageNotificationPolicy(
+                currentDeviceId = runtime.deviceRepository.deviceId,
+                initialMessages = runtime.chatRepository.messages.value
+            )
+            messageNotificationJob = serviceScope.launch {
+                runtime.chatRepository.messages.collect { messages ->
+                    if (policy.onMessagesChanged(messages, runtime.chatVisibilityTracker.isChatVisible)) {
+                        runtime.incomingMessageNotifier.show()
+                    }
+                }
+            }
+        }
         if (relayJob?.isActive != true) {
             relayJob = serviceScope.launch {
                 while (isActive) {
@@ -122,6 +134,8 @@ class StorageSharingForegroundService : Service() {
         }
     }
 
+    // The debug/sandbox manifest intentionally removes this production-only service.
+    @SuppressLint("ForegroundServiceType")
     private fun promoteToForeground(mode: SharingMode) {
         ServiceCompat.startForeground(
             this,
@@ -136,10 +150,7 @@ class StorageSharingForegroundService : Service() {
     }
 
     private fun updateNotification(mode: SharingMode) {
-        getSystemService(NotificationManager::class.java).notify(
-            StorageNotificationActions.NOTIFICATION_ID,
-            buildNotification(mode)
-        )
+        promoteToForeground(mode)
     }
 
     private fun ensureChannel() {

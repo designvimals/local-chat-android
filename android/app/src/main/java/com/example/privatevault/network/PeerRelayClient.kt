@@ -2,6 +2,7 @@ package com.example.privatevault.network
 
 import android.util.Base64
 import com.example.privatevault.attachment.AttachmentManager
+import com.example.privatevault.app.ChatVisibilityTracker
 import com.example.privatevault.BuildConfig
 import com.example.privatevault.data.local.PeerConnection
 import com.example.privatevault.data.local.TokenStore
@@ -68,6 +69,7 @@ class PeerRelayClient(
     private val deviceRepository: DeviceRepository,
     private val chatRepository: ChatRepository,
     private val attachmentManager: AttachmentManager,
+    private val chatVisibilityTracker: ChatVisibilityTracker,
     private val baseUrl: String = BuildConfig.BACKEND_URL
 ) {
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -257,10 +259,12 @@ class PeerRelayClient(
                 }
             }
 
-            request(session, "chat.read", buildJsonObject {
-                put("readerDeviceId", deviceRepository.deviceId)
-                put("readAt", TimeUtils.nowIso())
-            })
+            if (chatVisibilityTracker.isChatVisible) {
+                request(session, "chat.read", buildJsonObject {
+                    put("readerDeviceId", deviceRepository.deviceId)
+                    put("readAt", TimeUtils.nowIso())
+                })
+            }
             downloadMissingAttachments(session, mergeResponseMessages(request(session, "chat.sync", buildJsonObject {
                 put("readerDeviceId", deviceRepository.deviceId)
             })))

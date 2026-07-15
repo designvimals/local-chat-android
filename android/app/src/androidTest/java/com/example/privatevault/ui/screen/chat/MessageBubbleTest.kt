@@ -99,7 +99,9 @@ class MessageBubbleTest {
             onReplyQuoteClick = {},
             onImageClick = {},
             imageModifier = { androidx.compose.ui.Modifier },
-            attachmentManager = AttachmentManager(ApplicationProvider.getApplicationContext())
+            attachmentManager = AttachmentManager(ApplicationProvider.getApplicationContext()),
+            playExpressiveOnAppear = false,
+            expressiveMotionEnabled = false
         )
     }
 }

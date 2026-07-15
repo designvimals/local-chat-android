@@ -102,7 +102,8 @@ class MainActivity : ComponentActivity() {
                         themePreference = themePreference,
                         onThemePreferenceChanged = { preference ->
                             lifecycleScope.launch { settingsStore.setThemePreference(preference) }
-                        }
+                        },
+                        onChatVisibilityChanged = runtime.chatVisibilityTracker::setChatDestinationSelected
                     )
                 }
             }
@@ -111,6 +112,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        (application as PrivateVaultApplication).runtime.chatVisibilityTracker.setActivityForeground(true)
         appLockManager.onAppForegrounded()
         lifecycleScope.launch {
             if (BuildConfig.LOCAL_ONLY) {
@@ -138,6 +140,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
+        (application as PrivateVaultApplication).runtime.chatVisibilityTracker.setActivityForeground(false)
         appLockManager.onAppBackgrounded()
         super.onStop()
     }
