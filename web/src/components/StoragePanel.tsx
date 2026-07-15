@@ -1,6 +1,6 @@
 import { zip, type AsyncZippable } from "fflate";
 import { ArrowDown, ArrowLeft, ArrowUp, ArrowUpDown, Download, FolderSearch, Home, ListChecks, ListFilter, RefreshCw, RotateCcw, Trash2, WifiOff, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   clearDownloadBatch,
   createDownloadBatch,
@@ -113,6 +113,8 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
   const [storageAvailable, setStorageAvailable] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const batchRunActiveRef = useRef(false);
+  const autoResumeAttemptedRef = useRef(false);
 
   const breadcrumb = useMemo(() => path === "/"
     ? ["Shared folders"]
@@ -290,7 +292,8 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
   }
 
   async function startOrResumeBatch(batch: DownloadBatch, successNotice?: string) {
-    if (bulkProgress) return;
+    if (batchRunActiveRef.current || bulkProgress) return;
+    batchRunActiveRef.current = true;
     setError(null);
     setNotice(null);
     try {
@@ -315,9 +318,21 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
         `Download paused after ${completed} of ${saved.files.length}. ${detail} Resume to continue without repeating completed ${saved.mode === "zip" ? "ZIP parts" : "files"}.`
       );
     } finally {
+      batchRunActiveRef.current = false;
       setBulkProgress(null);
     }
   }
+
+  useEffect(() => {
+    if (!storageAvailable) {
+      autoResumeAttemptedRef.current = false;
+      return;
+    }
+    if (!pendingBatch || bulkProgress || autoResumeAttemptedRef.current) return;
+
+    autoResumeAttemptedRef.current = true;
+    void startOrResumeBatch(pendingBatch);
+  }, [bulkProgress, pendingBatch, storageAvailable]);
 
   async function handleIndividualDownloads() {
     if (selectedFiles.length === 0 || bulkProgress || pendingBatch) return;
@@ -588,7 +603,8 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
             <div className="download-resume-copy">
               <strong>{pendingBatch.files.length - pendingBatch.nextIndex} {pendingBatch.mode === "zip" ? "files" : "downloads"} waiting</strong>
               <span>
-                {pendingBatch.nextIndex} of {pendingBatch.files.length} completed. Progress is saved in this browser.
+                {pendingBatch.nextIndex} of {pendingBatch.files.length} completed. Progress is saved in this browser
+                {deviceOnline ? "." : " and will resume when the phone is online."}
               </span>
             </div>
             <div className="download-resume-actions">
