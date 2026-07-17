@@ -16,7 +16,7 @@ class PairingViewModel(
 ) : ViewModel() {
     private val _pairingCode = MutableStateFlow(tokenStore.getPairingCode())
     val pairingCode: StateFlow<String> = _pairingCode
-    private val _pairingAvailable = MutableStateFlow(!tokenStore.isPairingClaimed())
+    private val _pairingAvailable = MutableStateFlow(tokenStore.hasOpenPairingSlot())
     val pairingAvailable: StateFlow<Boolean> = _pairingAvailable
     val peerState: StateFlow<PeerConnectionState> = peerRelayClient.state
     private val _peerName = MutableStateFlow(tokenStore.getPeerConnection()?.friendName)
@@ -36,7 +36,7 @@ class PairingViewModel(
 
     fun refresh() {
         _pairingCode.value = tokenStore.getPairingCode()
-        _pairingAvailable.value = !tokenStore.isPairingClaimed()
+        _pairingAvailable.value = tokenStore.hasOpenPairingSlot()
         _peerName.value = tokenStore.getPeerConnection()?.friendName
     }
 

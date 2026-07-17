@@ -33,10 +33,10 @@
     <string name="later">Later</string>
     <string name="paired_device">Paired device</string>
     <string name="pairing">Pairing</string>
-    <string name="web_pairing_code">Web pairing code</string>
-    <string name="pairing_available_body">Enter this code on the web portal to connect chat and storage to this phone.</string>
-    <string name="pairing_claimed_body">This phone is already paired. Create a new code only to replace the paired browser.</string>
-    <string name="pairing_once_note">A code works once. Rotate it only when pairing a replacement browser.</string>
+    <string name="web_pairing_code">Pairing code</string>
+    <string name="pairing_available_body">Use this code once in a web browser and once on another Android phone.</string>
+    <string name="pairing_claimed_body">This code has been used by both a web browser and an Android phone. Create a new code to pair replacements.</string>
+    <string name="pairing_once_note">Each code has one web slot and one Android slot. Existing paired devices stay connected after the code closes.</string>
     <string name="create_new_pairing_code">Create new pairing code</string>
     <string name="onboarding_permission_title">Allow storage access</string>
     <string name="onboarding_permission_body">Allow storage access to attach and share files from your phone. This also enables automatic backups.</string>

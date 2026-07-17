@@ -4,6 +4,7 @@ import android.util.Base64
 import com.example.privatevault.attachment.AttachmentManager
 import com.example.privatevault.BuildConfig
 import com.example.privatevault.data.local.SettingsStore
+import com.example.privatevault.data.local.PairingClientType
 import com.example.privatevault.data.local.TokenStore
 import com.example.privatevault.data.repository.ChatRepository
 import com.example.privatevault.data.repository.DeviceRepository
@@ -115,7 +116,9 @@ class BackendClient(
                 _registrationState.value = BackendRegistrationState.Registered(baseUrl)
             }
             "pairing.claimed" -> {
-                tokenStore.markPairingClaimed()
+                tokenStore.markPairingClaimed(
+                    PairingClientType.fromWireName(message["clientType"]?.jsonPrimitive?.contentOrNull)
+                )
                 chatRepository.markViewerConnectedFromRelay()
             }
             "chat.sync" -> respond(session, message) {
@@ -298,7 +301,8 @@ class BackendClient(
             put("deviceName", deviceRepository.deviceName)
             put("pairingCode", tokenStore.getPairingCode())
             put("accessToken", tokenStore.getAccessToken())
-            put("pairingAvailable", !tokenStore.isPairingClaimed())
+            put("pairingAvailable", tokenStore.hasOpenPairingSlot())
+            put("pairedClientTypes", json.encodeToJsonElement(tokenStore.claimedPairingClientTypes()))
             put("storageSharingEnabled", storageSharingEnabled)
         }
     }

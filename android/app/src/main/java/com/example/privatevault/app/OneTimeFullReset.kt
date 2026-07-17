@@ -17,16 +17,15 @@ internal fun decideFullResetAction(
     resetCompleted: Boolean,
     legacyAppStateExists: Boolean
 ): FullResetAction = when {
-    versionCode != OneTimeFullReset.RESET_VERSION_CODE -> FullResetAction.None
+    versionCode < OneTimeFullReset.RESET_VERSION_CODE -> FullResetAction.None
     resetCompleted -> FullResetAction.None
     legacyAppStateExists -> FullResetAction.RequestClear
     else -> FullResetAction.MarkComplete
 }
 
 /**
- * Requests Android's full Clear storage operation exactly once for the v0.3.6
- * migration. The completion marker is written only on the first clean launch,
- * after Android has removed the previous app data.
+ * Requests Android's full Clear storage operation once for users upgrading from
+ * a pre-v0.3.6 installation. The marker prevents later releases from repeating it.
  */
 object OneTimeFullReset {
     internal const val RESET_VERSION_CODE = 12

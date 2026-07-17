@@ -41,9 +41,9 @@ class OneTimeFullResetTest {
     }
 
     @Test
-    fun resetIsLimitedToTheIntendedRelease() {
+    fun laterReleaseStillResetsUsersWhoSkippedTheResetRelease() {
         assertEquals(
-            FullResetAction.None,
+            FullResetAction.RequestClear,
             decideFullResetAction(
                 versionCode = OneTimeFullReset.RESET_VERSION_CODE + 1,
                 resetCompleted = false,

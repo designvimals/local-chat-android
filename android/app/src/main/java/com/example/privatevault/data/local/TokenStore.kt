@@ -47,14 +47,26 @@ class TokenStore(context: Context) {
         preferences.edit()
             .putString(KEY_PAIRING_CODE, code)
             .putBoolean(KEY_PAIRING_CLAIMED, false)
+            .putBoolean(KEY_PAIRING_CLAIMED_WEB, false)
+            .putBoolean(KEY_PAIRING_CLAIMED_ANDROID, false)
             .apply()
         return code
     }
 
-    fun isPairingClaimed(): Boolean = preferences.getBoolean(KEY_PAIRING_CLAIMED, false)
+    fun hasOpenPairingSlot(): Boolean = pairingSlotState().hasOpenSlot
 
-    fun markPairingClaimed() {
-        preferences.edit().putBoolean(KEY_PAIRING_CLAIMED, true).apply()
+    fun hasClaimedPairingSlot(): Boolean = pairingSlotState().claimedClientTypes().isNotEmpty()
+
+    fun claimedPairingClientTypes(): List<String> = pairingSlotState().claimedClientTypes()
+
+    fun markPairingClaimed(clientType: PairingClientType?) {
+        val updated = clientType?.let(pairingSlotState()::claim)
+            ?: PairingSlotState(webClaimed = true, androidClaimed = true)
+        preferences.edit()
+            .putBoolean(KEY_PAIRING_CLAIMED_WEB, updated.webClaimed)
+            .putBoolean(KEY_PAIRING_CLAIMED_ANDROID, updated.androidClaimed)
+            .putBoolean(KEY_PAIRING_CLAIMED, updated.isFullyClaimed)
+            .apply()
     }
 
     fun getPeerConnection(): PeerConnection? {
@@ -84,11 +96,27 @@ class TokenStore(context: Context) {
         return (100000 + random.nextInt(900000)).toString()
     }
 
+    private fun pairingSlotState(): PairingSlotState {
+        val hasTypedState = preferences.contains(KEY_PAIRING_CLAIMED_WEB) ||
+            preferences.contains(KEY_PAIRING_CLAIMED_ANDROID)
+        if (!hasTypedState) {
+            return PairingSlotState.fromLegacyClaimed(
+                preferences.getBoolean(KEY_PAIRING_CLAIMED, false)
+            )
+        }
+        return PairingSlotState(
+            webClaimed = preferences.getBoolean(KEY_PAIRING_CLAIMED_WEB, false),
+            androidClaimed = preferences.getBoolean(KEY_PAIRING_CLAIMED_ANDROID, false)
+        )
+    }
+
     private companion object {
         const val KEY_DEVICE_ID = "device_id"
         const val KEY_ACCESS_TOKEN = "access_token"
         const val KEY_PAIRING_CODE = "pairing_code"
         const val KEY_PAIRING_CLAIMED = "pairing_claimed"
+        const val KEY_PAIRING_CLAIMED_WEB = "pairing_claimed_web"
+        const val KEY_PAIRING_CLAIMED_ANDROID = "pairing_claimed_android"
         const val KEY_PEER_ACCESS_TOKEN = "peer_access_token"
         const val KEY_PEER_VIEWER_DEVICE_ID = "peer_viewer_device_id"
         const val KEY_PEER_FRIEND_NAME = "peer_friend_name"

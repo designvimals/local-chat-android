@@ -91,7 +91,7 @@ class ChatRepository(
     fun isMine(message: Message): Boolean = message.senderDeviceId == tokenStore.getDeviceId()
 
     fun setPeerConnected(connected: Boolean) {
-        _viewerConnected.value = connected || tokenStore.isPairingClaimed()
+        _viewerConnected.value = connected || tokenStore.hasClaimedPairingSlot()
         if (!connected) _remoteTyping.value = false
     }
 
@@ -118,7 +118,6 @@ class ChatRepository(
     }
 
     private fun markViewerConnected() {
-        tokenStore.markPairingClaimed()
         _viewerConnected.value = true
     }
 }
