@@ -18,6 +18,11 @@ const viewerRegistrationSchema = z.object({
   accessToken: z.string().min(32).max(256)
 });
 
+const downloadCancelSchema = z.object({
+  type: z.literal("download.cancel"),
+  requestId: z.string().min(1).max(128)
+});
+
 const viewerCommandSchema = z.object({
   type: z.enum([
     "chat.sync",
@@ -152,7 +157,11 @@ export class RelayHub {
     }
 
     if (identity.role === "viewer") {
-      this.forwardViewerCommand(socket, identity.accessToken, parsed);
+      if (parsed.type === "download.cancel") {
+        this.cancelViewerDownload(socket, identity.accessToken, parsed);
+      } else {
+        this.forwardViewerCommand(socket, identity.accessToken, parsed);
+      }
     } else {
       if (parsed.type === "device.update") {
         this.updateDevice(identity.accessToken, parsed);
@@ -160,6 +169,15 @@ export class RelayHub {
         this.forwardDeviceReply(identity.accessToken, parsed);
       }
     }
+  }
+
+  private cancelViewerDownload(socket: WebSocket, accessToken: string, message: Record<string, unknown>): void {
+    const parsed = downloadCancelSchema.safeParse(message);
+    if (!parsed.success) return;
+    const pending = this.pending.get(parsed.data.requestId);
+    if (!pending || pending.viewer !== socket || pending.deviceAccessToken !== accessToken) return;
+    clearTimeout(pending.timeout);
+    this.pending.delete(parsed.data.requestId);
   }
 
   private registerDevice(socket: WebSocket, message: Record<string, unknown>): void {

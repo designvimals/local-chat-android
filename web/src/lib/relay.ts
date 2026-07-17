@@ -19,6 +19,8 @@ interface PendingDownload {
   resolve: (file: { blob: Blob; name: string }) => void;
   reject: (error: Error) => void;
   timeout: number;
+  signal?: AbortSignal;
+  abortListener?: () => void;
 }
 
 type StatusListener = (status: RelayStatus) => void;
@@ -91,32 +93,48 @@ export class RelayClient {
     });
   }
 
-  download(path: string): Promise<{ blob: Blob; name: string }> {
-    return this.startDownload("storage.download", { path });
+  download(path: string, signal?: AbortSignal): Promise<{ blob: Blob; name: string }> {
+    return this.startDownload("storage.download", { path }, signal);
   }
 
   downloadAttachment(attachmentId: string): Promise<{ blob: Blob; name: string }> {
     return this.startDownload("chat.attachment.download", { attachmentId });
   }
 
-  private startDownload(type: string, payload: Record<string, unknown>): Promise<{ blob: Blob; name: string }> {
+  private startDownload(
+    type: string,
+    payload: Record<string, unknown>,
+    signal?: AbortSignal
+  ): Promise<{ blob: Blob; name: string }> {
     if (!this.registered || !this.status.deviceOnline || this.socket?.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("The phone is offline."));
     }
+    if (signal?.aborted) return Promise.reject(downloadCancelledError());
     const requestId = crypto.randomUUID();
     return new Promise((resolve, reject) => {
       const timeout = window.setTimeout(() => {
-        this.downloads.delete(requestId);
-        reject(new Error("The download timed out."));
+        this.cancelRemoteDownload(requestId);
+        const download = this.takeDownload(requestId);
+        download?.reject(new Error("The download timed out."));
       }, 10 * 60_000);
-      this.downloads.set(requestId, {
+      const download: PendingDownload = {
         chunks: [],
         name: "download",
         mimeType: "application/octet-stream",
         resolve,
         reject,
-        timeout
-      });
+        timeout,
+        signal
+      };
+      if (signal) {
+        download.abortListener = () => {
+          this.cancelRemoteDownload(requestId);
+          const cancelled = this.takeDownload(requestId);
+          cancelled?.reject(downloadCancelledError());
+        };
+        signal.addEventListener("abort", download.abortListener, { once: true });
+      }
+      this.downloads.set(requestId, download);
       this.socket?.send(JSON.stringify({
         type,
         requestId,
@@ -156,9 +174,8 @@ export class RelayClient {
     if (type === "response") {
       const download = this.downloads.get(requestId);
       if (download && message.ok !== true) {
-        window.clearTimeout(download.timeout);
-        this.downloads.delete(requestId);
-        download.reject(new Error(typeof message.error === "string" ? message.error : "Download failed."));
+        const failed = this.takeDownload(requestId);
+        failed?.reject(new Error(typeof message.error === "string" ? message.error : "Download failed."));
         return;
       }
       const pending = this.pending.get(requestId);
@@ -186,10 +203,8 @@ export class RelayClient {
       return;
     }
     if (type === "download.complete") {
-      const download = this.downloads.get(requestId);
+      const download = this.takeDownload(requestId);
       if (!download) return;
-      window.clearTimeout(download.timeout);
-      this.downloads.delete(requestId);
       download.resolve({
         blob: new Blob(download.chunks as BlobPart[], { type: download.mimeType }),
         name: download.name
@@ -213,11 +228,25 @@ export class RelayClient {
       request.reject(new Error(reason));
     }
     this.pending.clear();
-    for (const download of this.downloads.values()) {
-      window.clearTimeout(download.timeout);
-      download.reject(new Error(reason));
+    for (const requestId of [...this.downloads.keys()]) {
+      this.takeDownload(requestId)?.reject(new Error(reason));
     }
-    this.downloads.clear();
+  }
+
+  private takeDownload(requestId: string): PendingDownload | null {
+    const download = this.downloads.get(requestId);
+    if (!download) return null;
+    window.clearTimeout(download.timeout);
+    if (download.signal && download.abortListener) {
+      download.signal.removeEventListener("abort", download.abortListener);
+    }
+    this.downloads.delete(requestId);
+    return download;
+  }
+
+  private cancelRemoteDownload(requestId: string): void {
+    if (this.socket?.readyState !== WebSocket.OPEN) return;
+    this.socket.send(JSON.stringify({ type: "download.cancel", requestId }));
   }
 
   private setStatus(status: RelayStatus): void {
@@ -242,4 +271,10 @@ function decodeBase64(value: string): Uint8Array {
     bytes[index] = binary.charCodeAt(index);
   }
   return bytes;
+}
+
+function downloadCancelledError(): Error {
+  const error = new Error("Download cancelled.");
+  error.name = "AbortError";
+  return error;
 }

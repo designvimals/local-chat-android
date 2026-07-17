@@ -114,6 +114,7 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const batchRunActiveRef = useRef(false);
+  const batchAbortControllerRef = useRef<AbortController | null>(null);
   const autoResumeAttemptedRef = useRef(false);
 
   const breadcrumb = useMemo(() => path === "/"
@@ -226,8 +227,9 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
     return checkpoint;
   }
 
-  async function downloadIndividualBatch(batch: DownloadBatch) {
+  async function downloadIndividualBatch(batch: DownloadBatch, signal: AbortSignal) {
     for (let index = batch.nextIndex; index < batch.files.length; index += 1) {
+      throwIfCancelled(signal);
       const item = batch.files[index];
       setBulkProgress({
         completed: index,
@@ -235,10 +237,10 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
         label: item.name,
         phase: "downloading"
       });
-      const file = await relay.download(item.path);
+      const file = await relay.download(item.path, signal);
       saveBlob(file.blob, file.name);
       checkpointBatch(batch, index + 1);
-      await shortReceiverPause();
+      await shortReceiverPause(signal);
       if ((index + 1) % RECEIVER_BATCH_SIZE === 0 && index + 1 < batch.files.length) {
         setBulkProgress({
           completed: index + 1,
@@ -246,12 +248,12 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
           label: "Pausing briefly to keep this device responsive…",
           phase: "downloading"
         });
-        await receiverPause();
+        await receiverPause(signal);
       }
     }
   }
 
-  async function downloadZipBatch(batch: DownloadBatch) {
+  async function downloadZipBatch(batch: DownloadBatch, signal: AbortSignal) {
     const parts = zipParts(batch.files);
     let partStart = 0;
     for (const [partIndex, part] of parts.entries()) {
@@ -262,13 +264,14 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
       }
       const archive: AsyncZippable = {};
       for (const [itemIndex, item] of part.entries()) {
+        throwIfCancelled(signal);
         setBulkProgress({
           completed: partStart + itemIndex,
           total: batch.files.length,
           label: item.name,
           phase: "downloading"
         });
-        const file = await relay.download(item.path);
+        const file = await relay.download(item.path, signal);
         archive[uniqueArchiveName(file.name, archive)] = new Uint8Array(await file.blob.arrayBuffer());
       }
       setBulkProgress({
@@ -278,26 +281,29 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
         phase: "packing"
       });
       const zipped = await createZip(archive);
+      throwIfCancelled(signal);
       const zipName = archiveName(batch.folderPath, partIndex + 1, parts.length);
       saveBlob(new Blob([zipped], { type: "application/zip" }), zipName);
       checkpointBatch(batch, partEnd);
       partStart = partEnd;
-      await receiverPause();
+      await receiverPause(signal);
     }
   }
 
-  async function runBatch(batch: DownloadBatch) {
-    if (batch.mode === "individual") await downloadIndividualBatch(batch);
-    else await downloadZipBatch(batch);
+  async function runBatch(batch: DownloadBatch, signal: AbortSignal) {
+    if (batch.mode === "individual") await downloadIndividualBatch(batch, signal);
+    else await downloadZipBatch(batch, signal);
   }
 
   async function startOrResumeBatch(batch: DownloadBatch, successNotice?: string) {
     if (batchRunActiveRef.current || bulkProgress) return;
     batchRunActiveRef.current = true;
+    const abortController = new AbortController();
+    batchAbortControllerRef.current = abortController;
     setError(null);
     setNotice(null);
     try {
-      await runBatch(batch);
+      await runBatch(batch, abortController.signal);
       clearDownloadBatch(queueOwnerId);
       setPendingBatch(null);
       const parts = zipParts(batch.files);
@@ -310,6 +316,14 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
       ));
       leaveSelectionMode();
     } catch (caught) {
+      if (isAbortError(caught)) {
+        clearDownloadBatch(queueOwnerId);
+        setPendingBatch(null);
+        setError(null);
+        setNotice("Download cancelled. Files already saved on this device were kept.");
+        leaveSelectionMode();
+        return;
+      }
       const saved = loadDownloadBatch(queueOwnerId) ?? batch;
       setPendingBatch(saved);
       const completed = saved.nextIndex;
@@ -318,9 +332,19 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
         `Download paused after ${completed} of ${saved.files.length}. ${detail} Resume to continue without repeating completed ${saved.mode === "zip" ? "ZIP parts" : "files"}.`
       );
     } finally {
+      if (batchAbortControllerRef.current === abortController) {
+        batchAbortControllerRef.current = null;
+      }
       batchRunActiveRef.current = false;
       setBulkProgress(null);
     }
+  }
+
+  function cancelActiveBatch() {
+    const abortController = batchAbortControllerRef.current;
+    if (!abortController || bulkProgress?.phase === "scanning") return;
+    if (!window.confirm("Cancel the remaining downloads? Files already downloaded will stay on this device.")) return;
+    abortController.abort();
   }
 
   useEffect(() => {
@@ -578,16 +602,29 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
 
       <div className="storage-content">
         {bulkProgress ? (
-          <div className="bulk-progress" role="status" aria-live="polite">
-            <div>
-              <strong>
-                {bulkProgress.phase === "packing"
-                  ? "Preparing download"
-                  : bulkProgress.phase === "scanning"
-                    ? "Scanning chosen folder"
-                    : `Downloading ${bulkProgress.completed + 1} of ${bulkProgress.total}`}
-              </strong>
-              <span>{bulkProgress.label}</span>
+          <div className="bulk-progress">
+            <div className="bulk-progress-header">
+              <div className="bulk-progress-copy" role="status" aria-live="polite">
+                <strong>
+                  {bulkProgress.phase === "packing"
+                    ? "Preparing download"
+                    : bulkProgress.phase === "scanning"
+                      ? "Scanning chosen folder"
+                      : `Downloading ${bulkProgress.completed + 1} of ${bulkProgress.total}`}
+                </strong>
+                <span>{bulkProgress.label}</span>
+              </div>
+              {bulkProgress.phase !== "scanning" ? (
+                <button
+                  type="button"
+                  className="icon-button compact-icon-button bulk-cancel-button"
+                  onClick={cancelActiveBatch}
+                  aria-label="Cancel remaining downloads"
+                  title="Cancel download"
+                >
+                  <X aria-hidden size={18} />
+                </button>
+              ) : null}
             </div>
             {bulkProgress.phase === "scanning"
               ? <progress />
@@ -713,10 +750,39 @@ function zipParts(items: FileItem[]): FileItem[][] {
   return chunks;
 }
 
-function receiverPause(): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, 900));
+function receiverPause(signal: AbortSignal): Promise<void> {
+  return abortableDelay(900, signal);
 }
 
-function shortReceiverPause(): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, 250));
+function shortReceiverPause(signal: AbortSignal): Promise<void> {
+  return abortableDelay(250, signal);
+}
+
+function abortableDelay(durationMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(downloadCancelledError());
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      signal.removeEventListener("abort", handleAbort);
+      resolve();
+    }, durationMs);
+    const handleAbort = () => {
+      window.clearTimeout(timeout);
+      reject(downloadCancelledError());
+    };
+    signal.addEventListener("abort", handleAbort, { once: true });
+  });
+}
+
+function throwIfCancelled(signal: AbortSignal): void {
+  if (signal.aborted) throw downloadCancelledError();
+}
+
+function downloadCancelledError(): Error {
+  const error = new Error("Download cancelled.");
+  error.name = "AbortError";
+  return error;
+}
+
+function isAbortError(error: unknown): error is Error {
+  return error instanceof Error && error.name === "AbortError";
 }
