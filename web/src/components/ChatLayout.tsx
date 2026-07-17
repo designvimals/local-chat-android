@@ -11,6 +11,7 @@ import {
   saveLocalMessages
 } from "../lib/chatStore";
 import { navigate } from "../lib/navigation";
+import { setFaviconStatus } from "../lib/favicon";
 import { RelayClient } from "../lib/relay";
 import type { AuthSession, Message } from "../types/api";
 import { MessageInput } from "./MessageInput";
@@ -117,6 +118,10 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
       relay.close();
     };
   }, [relay]);
+
+  useEffect(() => {
+    setFaviconStatus(online ? "online" : relayConnected ? "offline" : "connecting");
+  }, [online, relayConnected]);
 
   useEffect(() => {
     if (online) void sync();
