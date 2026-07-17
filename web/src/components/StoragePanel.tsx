@@ -1,6 +1,6 @@
 import { zip, type AsyncZippable } from "fflate";
-import { ArrowDown, ArrowLeft, ArrowUp, ArrowUpDown, Download, FolderSearch, Home, ListChecks, ListFilter, RefreshCw, RotateCcw, Trash2, WifiOff, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowDown, ArrowLeft, ArrowUp, ArrowUpDown, Download, FolderSearch, Home, ListChecks, ListFilter, RefreshCw, RotateCcw, Search, Trash2, WifiOff, X } from "lucide-react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   clearDownloadBatch,
   createDownloadBatch,
@@ -16,6 +16,7 @@ import {
   type ReadableDirectoryEntry
 } from "../lib/directoryScan";
 import { categorizeFile, fileFilterOptions, fileMatchesFilter, type FileFilter } from "../lib/fileFilters";
+import { fileMatchesSearch } from "../lib/fileSearch";
 import {
   defaultSortDirection,
   fileSortOptions,
@@ -118,6 +119,7 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
   const [fileFilter, setFileFilter] = useState<FileFilter>("all");
   const [fileSort, setFileSort] = useState<FileSort>("name");
   const [sortDirection, setSortDirection] = useState<FileSortDirection>("ascending");
+  const [searchQuery, setSearchQuery] = useState("");
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(() => new Set());
   const [bulkProgress, setBulkProgress] = useState<BulkProgress | null>(null);
@@ -132,15 +134,17 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
   const batchAbortControllerRef = useRef<AbortController | null>(null);
   const autoResumeAttemptedRef = useRef(false);
   const transferMeterRef = useRef<TransferMeter | null>(null);
+  const deferredSearchQuery = useDeferredValue(searchQuery);
 
   const breadcrumb = useMemo(() => path === "/"
     ? ["Shared folders"]
     : ["Shared folders", ...path.split("/").filter(Boolean)], [path]);
   const allFiles = useMemo(() => items.filter((item) => item.type === "file"), [items]);
   const filteredItems = useMemo(
-    () => items.filter((item) => fileMatchesFilter(item, fileFilter)),
-    [fileFilter, items]
+    () => items.filter((item) => fileMatchesFilter(item, fileFilter) && fileMatchesSearch(item, deferredSearchQuery)),
+    [deferredSearchQuery, fileFilter, items]
   );
+  const hasSearchQuery = deferredSearchQuery.trim().length > 0;
   const sortedItems = useMemo(
     () => sortFileItems(filteredItems, fileSort, sortDirection),
     [fileSort, filteredItems, sortDirection]
@@ -200,6 +204,7 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
   useEffect(() => {
     setSelectionMode(false);
     setSelectedPaths(new Set());
+    setSearchQuery("");
   }, [path]);
 
   useEffect(() => {
@@ -616,8 +621,36 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
             </div>
           </div>
         )}
-        {!selectionMode && allFiles.length > 0 ? (
+        {!selectionMode && items.length > 0 ? (
           <div className="file-organize-controls">
+            <div className="storage-search">
+              <Search className="storage-search-icon" aria-hidden size={18} />
+              <label className="sr-only" htmlFor="storage-folder-search">Search file names</label>
+              <input
+                id="storage-folder-search"
+                type="search"
+                name="storage-search"
+                className="storage-search-input"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") setSearchQuery("");
+                }}
+                placeholder="Search file names…"
+                autoComplete="off"
+                spellCheck={false}
+              />
+              {searchQuery ? (
+                <button
+                  type="button"
+                  className="storage-search-clear"
+                  onClick={() => setSearchQuery("")}
+                  aria-label="Clear file name search"
+                >
+                  <X aria-hidden size={17} />
+                </button>
+              ) : <span className="storage-search-clear-placeholder" aria-hidden />}
+            </div>
             <div className="file-filter-bar">
               <span className="file-filter-label" aria-hidden>
                 <ListFilter size={16} />
@@ -758,8 +791,17 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
         {!loading && !error && items.length === 0 ? <div className="storage-state" role="status">This folder is empty.</div> : null}
         {!loading && !error && items.length > 0 && filteredItems.length === 0 ? (
           <div className="storage-state filtered-empty" role="status">
-            <span>No {fileFilterOptions.find((option) => option.value === fileFilter)?.label.toLowerCase()} in this folder.</span>
-            <button type="button" className="soft-button" onClick={() => setFileFilter("all")}>Show all files</button>
+            {hasSearchQuery ? (
+              <>
+                <span>No items match “{deferredSearchQuery.trim()}”.</span>
+                <button type="button" className="soft-button" onClick={() => setSearchQuery("")}>Clear search</button>
+              </>
+            ) : (
+              <>
+                <span>No {fileFilterOptions.find((option) => option.value === fileFilter)?.label.toLowerCase()} in this folder.</span>
+                <button type="button" className="soft-button" onClick={() => setFileFilter("all")}>Show all files</button>
+              </>
+            )}
           </div>
         ) : null}
         {!loading && !error && filteredItems.length > 0 ? (

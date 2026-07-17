@@ -686,6 +686,59 @@ h2 {
   gap: 7px;
 }
 
+.storage-search {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.storage-search:focus-within {
+  border-color: rgba(22, 79, 70, 0.46);
+  box-shadow: 0 0 0 3px rgba(22, 79, 70, 0.1);
+}
+
+.storage-search-icon { justify-self: center; }
+
+.storage-search-input {
+  width: 100%;
+  min-width: 0;
+  height: 42px;
+  border: 0;
+  padding: 0;
+  color: var(--ink);
+  background: transparent;
+  font: inherit;
+  font-size: 1rem;
+}
+
+.storage-search-input:focus { outline: 0; }
+.storage-search-input::-webkit-search-cancel-button { appearance: none; }
+
+.storage-search-clear,
+.storage-search-clear-placeholder {
+  width: 44px;
+  height: 44px;
+  display: inline-grid;
+  place-items: center;
+}
+
+.storage-search-clear {
+  border: 0;
+  border-radius: 12px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.storage-search-clear:hover { color: var(--ink); background: rgba(22, 79, 70, 0.08); }
+.storage-search-clear:focus-visible { outline: 2px solid var(--evergreen); outline-offset: -4px; }
+
 .storage-content {
   min-height: 0;
   display: flex;
@@ -904,6 +957,8 @@ h2 {
 }
 
 .file-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 64px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 44px;
   gap: 6px;
