@@ -14,6 +14,7 @@ interface PendingRequest {
 
 interface PendingDownload {
   chunks: Uint8Array[];
+  bytesReceived: number;
   name: string;
   mimeType: string;
   resolve: (file: { blob: Blob; name: string }) => void;
@@ -21,6 +22,12 @@ interface PendingDownload {
   timeout: number;
   signal?: AbortSignal;
   abortListener?: () => void;
+  onProgress?: (receivedBytes: number) => void;
+}
+
+interface DownloadOptions {
+  signal?: AbortSignal;
+  onProgress?: (receivedBytes: number) => void;
 }
 
 type StatusListener = (status: RelayStatus) => void;
@@ -93,8 +100,8 @@ export class RelayClient {
     });
   }
 
-  download(path: string, signal?: AbortSignal): Promise<{ blob: Blob; name: string }> {
-    return this.startDownload("storage.download", { path }, signal);
+  download(path: string, options: DownloadOptions = {}): Promise<{ blob: Blob; name: string }> {
+    return this.startDownload("storage.download", { path }, options);
   }
 
   downloadAttachment(attachmentId: string): Promise<{ blob: Blob; name: string }> {
@@ -104,8 +111,9 @@ export class RelayClient {
   private startDownload(
     type: string,
     payload: Record<string, unknown>,
-    signal?: AbortSignal
+    options: DownloadOptions = {}
   ): Promise<{ blob: Blob; name: string }> {
+    const { signal, onProgress } = options;
     if (!this.registered || !this.status.deviceOnline || this.socket?.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("The phone is offline."));
     }
@@ -119,12 +127,14 @@ export class RelayClient {
       }, 10 * 60_000);
       const download: PendingDownload = {
         chunks: [],
+        bytesReceived: 0,
         name: "download",
         mimeType: "application/octet-stream",
         resolve,
         reject,
         timeout,
-        signal
+        signal,
+        onProgress
       };
       if (signal) {
         download.abortListener = () => {
@@ -199,7 +209,10 @@ export class RelayClient {
     if (type === "download.chunk") {
       const download = this.downloads.get(requestId);
       if (!download || typeof message.data !== "string") return;
-      download.chunks.push(decodeBase64(message.data));
+      const chunk = decodeBase64(message.data);
+      download.chunks.push(chunk);
+      download.bytesReceived += chunk.byteLength;
+      download.onProgress?.(download.bytesReceived);
       return;
     }
     if (type === "download.complete") {

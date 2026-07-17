@@ -3,16 +3,44 @@ import test from "node:test";
 import {
   clearDownloadBatch,
   loadDownloadBatch,
-  saveDownloadBatch
+  saveDownloadBatch,
+  saveDownloadProgress
 } from "../src/lib/downloadQueue.ts";
 
-function memoryStorage() {
+function memoryLegacyStorage() {
   const values = new Map();
   return {
     getItem(key) { return values.get(key) ?? null; },
     setItem(key, value) { values.set(key, value); },
     removeItem(key) { values.delete(key); },
     values
+  };
+}
+
+function memoryQueueStore() {
+  const manifests = new Map();
+  const progress = new Map();
+  let manifestWrites = 0;
+  return {
+    async loadBatch(ownerId) {
+      if (!manifests.has(ownerId) || !progress.has(ownerId)) return null;
+      return { manifest: manifests.get(ownerId), progress: progress.get(ownerId) };
+    },
+    async saveBatch(ownerId, manifest, nextProgress) {
+      manifests.set(ownerId, structuredClone(manifest));
+      progress.set(ownerId, structuredClone(nextProgress));
+      manifestWrites += 1;
+    },
+    async saveProgress(ownerId, nextProgress) {
+      progress.set(ownerId, structuredClone(nextProgress));
+    },
+    async clear(ownerId) {
+      manifests.delete(ownerId);
+      progress.delete(ownerId);
+    },
+    get manifestWrites() { return manifestWrites; },
+    manifests,
+    progress
   };
 }
 
@@ -46,31 +74,56 @@ function batch(overrides = {}) {
   };
 }
 
-test("download checkpoint survives reload for the same paired browser", () => {
-  const storage = memoryStorage();
-  saveDownloadBatch("viewer-one", batch({ nextIndex: 1 }), storage);
+test("progress updates do not rewrite the saved file manifest", async () => {
+  const store = memoryQueueStore();
+  const options = { store, legacyStorage: null };
+  await saveDownloadBatch("viewer-one", batch(), options);
+  await saveDownloadProgress("viewer-one", "batch-one", 1, options);
 
-  assert.equal(loadDownloadBatch("viewer-one", storage)?.nextIndex, 1);
-  assert.equal(loadDownloadBatch("viewer-two", storage), null);
+  assert.equal(store.manifestWrites, 1);
+  assert.equal((await loadDownloadBatch("viewer-one", options))?.nextIndex, 1);
 });
 
-test("a completed or malformed queue is removed instead of being resumed", () => {
-  const storage = memoryStorage();
-  saveDownloadBatch("viewer-one", batch({ nextIndex: 2 }), storage);
-  assert.equal(loadDownloadBatch("viewer-one", storage), null);
+test("a saved queue remains isolated to its paired browser", async () => {
+  const store = memoryQueueStore();
+  const options = { store, legacyStorage: null };
+  await saveDownloadBatch("viewer-one", batch({ nextIndex: 1 }), options);
 
-  storage.setItem("between.download-batch.v1.viewer-one", "not-json");
-  assert.equal(loadDownloadBatch("viewer-one", storage), null);
-  assert.equal(storage.values.size, 0);
+  assert.equal((await loadDownloadBatch("viewer-one", options))?.nextIndex, 1);
+  assert.equal(await loadDownloadBatch("viewer-two", options), null);
 });
 
-test("discard clears only the selected browser's queue", () => {
-  const storage = memoryStorage();
-  saveDownloadBatch("viewer-one", batch(), storage);
-  saveDownloadBatch("viewer-two", batch({ id: "batch-two" }), storage);
+test("a completed queue is removed instead of being resumed", async () => {
+  const store = memoryQueueStore();
+  const options = { store, legacyStorage: null };
+  await saveDownloadBatch("viewer-one", batch({ nextIndex: 2 }), options);
 
-  clearDownloadBatch("viewer-one", storage);
+  assert.equal(await loadDownloadBatch("viewer-one", options), null);
+  assert.equal(store.manifests.has("viewer-one"), false);
+});
 
-  assert.equal(loadDownloadBatch("viewer-one", storage), null);
-  assert.equal(loadDownloadBatch("viewer-two", storage)?.id, "batch-two");
+test("legacy localStorage queues migrate into the split async store", async () => {
+  const store = memoryQueueStore();
+  const legacyStorage = memoryLegacyStorage();
+  legacyStorage.setItem("between.download-batch.v1.viewer-one", JSON.stringify(batch({ nextIndex: 1 })));
+
+  const restored = await loadDownloadBatch("viewer-one", { store, legacyStorage });
+
+  assert.equal(restored?.nextIndex, 1);
+  assert.equal(store.manifestWrites, 1);
+  assert.equal(legacyStorage.values.size, 0);
+});
+
+test("discard clears the manifest, progress, and legacy fallback", async () => {
+  const store = memoryQueueStore();
+  const legacyStorage = memoryLegacyStorage();
+  const options = { store, legacyStorage };
+  await saveDownloadBatch("viewer-one", batch(), options);
+  legacyStorage.setItem("between.download-batch.v1.viewer-one", JSON.stringify(batch()));
+
+  await clearDownloadBatch("viewer-one", options);
+
+  assert.equal(await loadDownloadBatch("viewer-one", options), null);
+  assert.equal(store.manifests.has("viewer-one"), false);
+  assert.equal(legacyStorage.values.size, 0);
 });
