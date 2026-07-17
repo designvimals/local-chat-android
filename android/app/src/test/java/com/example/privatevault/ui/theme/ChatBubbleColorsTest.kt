@@ -22,6 +22,24 @@ class ChatBubbleColorsTest {
                 val colors = palette.resolveChatBubbleColors(darkTheme)
                 assertReadable(palette, darkTheme, "outgoing", colors.onOutgoing, colors.outgoing)
                 assertReadable(palette, darkTheme, "incoming", colors.onIncoming, colors.incoming)
+                assertTrue(
+                    "$palette ${if (darkTheme) "dark" else "light"} composer controls must use two tones",
+                    colors.composerAdd != colors.composerSend
+                )
+                assertReadable(
+                    palette,
+                    darkTheme,
+                    "composer add",
+                    colors.onComposerAdd,
+                    colors.composerAdd
+                )
+                assertReadable(
+                    palette,
+                    darkTheme,
+                    "composer send",
+                    colors.onComposerSend,
+                    colors.composerSend
+                )
                 val screenBackground = if (darkTheme) DarkBackground else LightBackground
                 assertReadable(
                     palette,

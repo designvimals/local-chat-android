@@ -1,6 +1,7 @@
 package com.example.privatevault.ui.screen.chat
 
 import android.animation.ValueAnimator
+import android.text.format.DateFormat
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -74,6 +75,9 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -90,17 +94,21 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -108,12 +116,16 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -121,12 +133,16 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.privatevault.R
 import com.example.privatevault.attachment.AttachmentManager
+import com.example.privatevault.data.repository.PeerPresence
 import com.example.privatevault.model.ChatAttachment
 import com.example.privatevault.model.DeleteScope
 import com.example.privatevault.model.Message
@@ -134,6 +150,7 @@ import com.example.privatevault.model.canonicalAttachments
 import com.example.privatevault.network.BackendRegistrationState
 import java.time.Duration
 import java.time.Instant
+import java.util.Date
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -177,6 +194,7 @@ fun ChatScreen(
 ) {
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val viewerConnected by viewModel.viewerConnected.collectAsStateWithLifecycle()
+    val peerPresence by viewModel.peerPresence.collectAsStateWithLifecycle()
     val remoteTyping by viewModel.remoteTyping.collectAsStateWithLifecycle()
     var imageViewer by remember { mutableStateOf<ImageViewerState?>(null) }
     val currentDeviceId = remember(viewModel) { viewModel.currentDeviceId() }
@@ -227,6 +245,7 @@ fun ChatScreen(
                         viewModel.markIncomingRead()
                     },
                     viewerConnected = viewerConnected,
+                    peerPresence = peerPresence,
                     remoteTyping = remoteTyping,
                     pairingCode = pairingCode,
                     pairingAvailable = pairingAvailable,
@@ -289,6 +308,7 @@ private fun ConversationScaffold(
     initialPositioningComplete: Boolean,
     onInitialPositioned: () -> Unit,
     viewerConnected: Boolean,
+    peerPresence: PeerPresence,
     remoteTyping: Boolean,
     pairingCode: String,
     pairingAvailable: Boolean,
@@ -334,18 +354,104 @@ private fun ConversationScaffold(
     var deleteDialogVisible by remember { mutableStateOf(false) }
     val deleteSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var highlightedMessageId by remember { mutableStateOf<String?>(null) }
+    var destinationScrollJob by remember { mutableStateOf<Job?>(null) }
     var enteringMessageId by remember { mutableStateOf<String?>(null) }
+    var searchActive by rememberSaveable { mutableStateOf(false) }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var appliedSearchQuery by rememberSaveable { mutableStateOf("") }
+    var searchResultIndex by rememberSaveable { mutableIntStateOf(-1) }
     val messagesById = remember(allMessages) { allMessages.associateBy(Message::id) }
     val selectedMessages = remember(selectedIds, allMessages) { allMessages.filter { it.id in selectedIds } }
     val selectedAllMine = selectedMessages.isNotEmpty() &&
         selectedMessages.all { isMine(it) && it.deletedAt == null }
-
+    val searchResultIds = remember(presentedMessages, appliedSearchQuery) {
+        chatSearchMessageIds(presentedMessages.map(PresentedMessage::message), appliedSearchQuery)
+    }
     fun clearSelection() {
         selectedIds = emptySet()
         contextAnchorId = null
     }
 
-    BackHandler(enabled = selectedIds.isNotEmpty()) { clearSelection() }
+    fun closeSearch() {
+        destinationScrollJob?.cancel()
+        destinationScrollJob = null
+        highlightedMessageId = null
+        searchActive = false
+        searchQuery = ""
+        appliedSearchQuery = ""
+        searchResultIndex = -1
+    }
+
+    fun scrollToDestination(
+        targetId: String,
+        targetIndex: Int,
+        persistent: Boolean,
+        animated: Boolean
+    ) {
+        destinationScrollJob?.cancel()
+        highlightedMessageId = null
+        destinationScrollJob = scope.launch {
+            val prefix = if (!viewerConnected && pairingAvailable) 1 else 0
+            if (animated && animationsEnabled) {
+                listState.animateScrollToItem(targetIndex + prefix)
+            } else {
+                listState.scrollToItem(targetIndex + prefix)
+            }
+            highlightedMessageId = targetId
+            if (!persistent) {
+                delay(850)
+                if (highlightedMessageId == targetId) highlightedMessageId = null
+            }
+        }
+    }
+
+    fun scrollToSearchResult(index: Int, animated: Boolean) {
+        val targetId = searchResultIds.getOrNull(index) ?: return
+        val targetIndex = presentedMessages.indexOfFirst { it.message.id == targetId }
+        if (targetIndex >= 0) {
+            scrollToDestination(targetId, targetIndex, persistent = true, animated = animated)
+        }
+    }
+
+    fun moveSearchResult(delta: Int) {
+        if (searchResultIds.isEmpty()) return
+        val current = searchResultIndex.takeIf { it in searchResultIds.indices }
+            ?: searchResultIds.lastIndex
+        val next = Math.floorMod(current + delta, searchResultIds.size)
+        searchResultIndex = next
+        scrollToSearchResult(next, animated = true)
+    }
+
+    BackHandler(enabled = selectedIds.isNotEmpty() || searchActive) {
+        if (selectedIds.isNotEmpty()) clearSelection() else closeSearch()
+    }
+
+    LaunchedEffect(searchActive, searchQuery) {
+        if (!searchActive) return@LaunchedEffect
+        if (searchQuery.isBlank()) {
+            destinationScrollJob?.cancel()
+            highlightedMessageId = null
+            appliedSearchQuery = ""
+            searchResultIndex = -1
+            return@LaunchedEffect
+        }
+        delay(180)
+        appliedSearchQuery = searchQuery.trim()
+    }
+
+    LaunchedEffect(searchResultIds, appliedSearchQuery, searchActive) {
+        if (!searchActive || appliedSearchQuery.isBlank()) {
+            searchResultIndex = -1
+            return@LaunchedEffect
+        }
+        if (searchResultIds.isEmpty()) {
+            destinationScrollJob?.cancel()
+            destinationScrollJob = null
+            highlightedMessageId = null
+        }
+        searchResultIndex = searchResultIds.lastIndex
+        if (searchResultIndex >= 0) scrollToSearchResult(searchResultIndex, animated = false)
+    }
 
     LaunchedEffect(initialTargetId, initialPositioningComplete, presentedMessages.size) {
         if (initialPositioningComplete || initialTargetId == null) return@LaunchedEffect
@@ -397,13 +503,25 @@ private fun ConversationScaffold(
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
         topBar = {
             ExpressiveConversationHeader(
-                viewerConnected = viewerConnected,
+                peerPresence = peerPresence,
                 remoteTyping = remoteTyping,
                 registrationState = registrationState,
                 localOnly = localOnly,
                 onOpenSettings = onOpenSettings,
                 selectedCount = selectedIds.size,
-                onClearSelection = ::clearSelection
+                onClearSelection = ::clearSelection,
+                searchActive = searchActive,
+                searchQuery = searchQuery,
+                searchResultIndex = searchResultIndex,
+                searchResultCount = searchResultIds.size,
+                onOpenSearch = {
+                    clearSelection()
+                    searchActive = true
+                },
+                onSearchQueryChange = { searchQuery = it },
+                onPreviousSearchResult = { moveSearchResult(-1) },
+                onNextSearchResult = { moveSearchResult(1) },
+                onCloseSearch = ::closeSearch
             )
         },
         bottomBar = {
@@ -476,7 +594,6 @@ private fun ConversationScaffold(
                             message = item.message,
                             isMine = item.isMine,
                             showSenderName = !item.isMine && !item.groupedWithPrevious,
-                            showAvatar = !item.isMine && !item.groupedWithNext,
                             groupedWithPrevious = item.groupedWithPrevious,
                             groupedWithNext = item.groupedWithNext,
                             reactedByMe = itemReactions,
@@ -511,12 +628,13 @@ private fun ConversationScaffold(
                             onDelete = { deleteDialogVisible = true; contextAnchorId = null },
                             onReplyQuoteClick = { targetId ->
                                 val targetIndex = presentedMessages.indexOfFirst { it.message.id == targetId }
-                                if (targetIndex >= 0) scope.launch {
-                                    val prefix = if (!viewerConnected && pairingAvailable) 1 else 0
-                                    listState.animateScrollToItem(targetIndex + prefix)
-                                    highlightedMessageId = targetId
-                                    delay(850)
-                                    if (highlightedMessageId == targetId) highlightedMessageId = null
+                                if (targetIndex >= 0) {
+                                    scrollToDestination(
+                                        targetId,
+                                        targetIndex,
+                                        persistent = false,
+                                        animated = true
+                                    )
                                 }
                             },
                             onImageClick = { attachment -> onImageClick(item.message, attachment) },
@@ -596,64 +714,155 @@ private fun ConversationScaffold(
 
 @Composable
 private fun ExpressiveConversationHeader(
-    viewerConnected: Boolean,
+    peerPresence: PeerPresence,
     remoteTyping: Boolean,
     registrationState: BackendRegistrationState,
     localOnly: Boolean,
     onOpenSettings: () -> Unit,
     selectedCount: Int,
-    onClearSelection: () -> Unit
+    onClearSelection: () -> Unit,
+    searchActive: Boolean,
+    searchQuery: String,
+    searchResultIndex: Int,
+    searchResultCount: Int,
+    onOpenSearch: () -> Unit,
+    onSearchQueryChange: (String) -> Unit,
+    onPreviousSearchResult: () -> Unit,
+    onNextSearchResult: () -> Unit,
+    onCloseSearch: () -> Unit
 ) {
+    val context = LocalContext.current
+    val focusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val lastSeenTime = remember(context, peerPresence.lastSeenAtMillis) {
+        peerPresence.lastSeenAtMillis?.let { timestamp ->
+            DateFormat.getTimeFormat(context).format(Date(timestamp))
+        }
+    }
     val status = when {
-        localOnly -> stringResource(R.string.app_name)
-        remoteTyping -> stringResource(R.string.typing_indicator, stringResource(R.string.contact_name))
-        viewerConnected -> stringResource(R.string.status_connected)
-        registrationState is BackendRegistrationState.Registered -> stringResource(R.string.status_code_active)
+        localOnly -> stringResource(R.string.status_local)
+        remoteTyping -> stringResource(R.string.typing_indicator_short)
+        peerPresence.isOnline -> stringResource(R.string.status_contact_online)
+        lastSeenTime != null -> stringResource(R.string.status_contact_last_seen, lastSeenTime)
         registrationState is BackendRegistrationState.Failed -> stringResource(R.string.status_relay_offline)
+        registrationState is BackendRegistrationState.Registered -> stringResource(R.string.status_contact_offline)
         else -> stringResource(R.string.status_connecting_relay)
     }
+    LaunchedEffect(searchActive) {
+        if (searchActive) {
+            focusRequester.requestFocus()
+            keyboardController?.show()
+        }
+    }
     Surface(color = MaterialTheme.colorScheme.surface) {
-        Box(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .windowInsetsPadding(WindowInsets.statusBars.union(WindowInsets.displayCutout))
-                .padding(horizontal = 18.dp, vertical = 8.dp)
-                .height(58.dp),
-            contentAlignment = Alignment.Center
+                .padding(horizontal = 14.dp, vertical = 6.dp)
+                .height(62.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                if (selectedCount > 0) stringResource(R.string.selected_count, selectedCount)
-                else stringResource(R.string.contact_name),
-                style = MaterialTheme.typography.titleLarge.copy(fontSize = 24.sp, lineHeight = 29.sp),
-                fontWeight = FontWeight.SemiBold
-            )
-            if (selectedCount == 0) Row(
-                modifier = Modifier.align(Alignment.CenterStart).width(142.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Box(
-                    Modifier.size(9.dp).clip(CircleShape).background(
-                        if (viewerConnected || localOnly) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.outline
+            when {
+                selectedCount > 0 -> {
+                    Text(
+                        stringResource(R.string.selected_count, selectedCount),
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold
                     )
-                )
-                Text(
-                    status,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1
-                )
-            }
-            IconButton(
-                onClick = if (selectedCount > 0) onClearSelection else onOpenSettings,
-                modifier = Modifier.align(Alignment.CenterEnd).size(48.dp)
-            ) {
-                Icon(
-                    if (selectedCount > 0) Icons.Default.Close else Icons.Default.Settings,
-                    stringResource(if (selectedCount > 0) R.string.clear_selection else R.string.settings),
-                    Modifier.size(26.dp)
-                )
+                    IconButton(onClick = onClearSelection, modifier = Modifier.size(48.dp)) {
+                        Icon(Icons.Default.Close, stringResource(R.string.clear_selection))
+                    }
+                }
+                searchActive -> {
+                    TextField(
+                        value = searchQuery,
+                        onValueChange = onSearchQueryChange,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(52.dp)
+                            .focusRequester(focusRequester),
+                        singleLine = true,
+                        placeholder = { Text(stringResource(R.string.search_messages)) },
+                        leadingIcon = { Icon(Icons.Default.Search, null) },
+                        trailingIcon = {
+                            if (searchQuery.isNotBlank()) {
+                                Text(
+                                    if (searchResultCount == 0) stringResource(R.string.no_search_results)
+                                    else stringResource(
+                                        R.string.search_result_count,
+                                        searchResultIndex + 1,
+                                        searchResultCount
+                                    ),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        },
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = { keyboardController?.hide() }),
+                        shape = RoundedCornerShape(26.dp),
+                        colors = TextFieldDefaults.colors(
+                            focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                            unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                        )
+                    )
+                    IconButton(
+                        onClick = onPreviousSearchResult,
+                        enabled = searchResultCount > 0,
+                        modifier = Modifier.size(44.dp)
+                    ) {
+                        Icon(Icons.Default.KeyboardArrowUp, stringResource(R.string.previous_search_result))
+                    }
+                    IconButton(
+                        onClick = onNextSearchResult,
+                        enabled = searchResultCount > 0,
+                        modifier = Modifier.size(44.dp)
+                    ) {
+                        Icon(Icons.Default.KeyboardArrowDown, stringResource(R.string.next_search_result))
+                    }
+                    IconButton(onClick = onCloseSearch, modifier = Modifier.size(44.dp)) {
+                        Icon(Icons.Default.Close, stringResource(R.string.close_search))
+                    }
+                }
+                else -> {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            stringResource(R.string.contact_name),
+                            style = MaterialTheme.typography.titleLarge.copy(fontSize = 24.sp, lineHeight = 27.sp),
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(7.dp)
+                        ) {
+                            Box(
+                                Modifier.size(8.dp).clip(CircleShape).background(
+                                    if (peerPresence.isOnline || localOnly) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.outline
+                                )
+                            )
+                            Text(
+                                status,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                    IconButton(onClick = onOpenSearch, modifier = Modifier.size(48.dp)) {
+                        Icon(Icons.Default.Search, stringResource(R.string.search_messages), Modifier.size(25.dp))
+                    }
+                    IconButton(onClick = onOpenSettings, modifier = Modifier.size(48.dp)) {
+                        Icon(Icons.Default.Settings, stringResource(R.string.settings), Modifier.size(26.dp))
+                    }
+                }
             }
         }
     }

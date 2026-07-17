@@ -7,6 +7,7 @@ package com.example.privatevault.ui.screen.chat
 
 import android.text.format.Formatter
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -14,12 +15,14 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -38,7 +41,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Reply
@@ -51,6 +53,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -77,8 +80,12 @@ import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.AlignmentLine
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.FirstBaseline
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
@@ -90,9 +97,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -112,9 +121,11 @@ import com.example.privatevault.util.TimeUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.PI
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 private val ReactionChoices = listOf("❤️", "👍", "😂", "😮", "😢", "🔥")
@@ -124,7 +135,6 @@ fun MessageBubble(
     message: Message,
     isMine: Boolean,
     showSenderName: Boolean,
-    showAvatar: Boolean,
     groupedWithPrevious: Boolean,
     groupedWithNext: Boolean,
     reactedByMe: Set<String>,
@@ -193,7 +203,7 @@ fun MessageBubble(
             expressivePlaybackRequest += 1
         }
     }
-    val replayEffectLabel = if (replayableExpressiveMessage) {
+    val replayEffectLabel = if (replayableExpressiveMessage && expressiveMotionEnabled) {
         stringResource(R.string.replay_message_effect)
     } else null
     val attachmentDescription = when {
@@ -220,6 +230,8 @@ fun MessageBubble(
             menuAbove = coordinates.boundsInWindow().center.y > view.height / 2f
         }
     } else Modifier
+    val messageInteractionSource = remember(message.id) { MutableInteractionSource() }
+    val messageIndication = LocalIndication.current
 
     Column(
         modifier = modifier
@@ -235,7 +247,7 @@ fun MessageBubble(
         if (showSenderName && !isMine) {
             Text(
                 stringResource(R.string.contact_name),
-                Modifier.padding(start = 58.dp, bottom = 7.dp),
+                Modifier.padding(start = 4.dp, bottom = 7.dp),
                 style = MaterialTheme.typography.labelLarge.copy(fontSize = 15.sp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -245,12 +257,6 @@ fun MessageBubble(
             horizontalArrangement = if (isMine) Arrangement.End else Arrangement.Start,
             verticalAlignment = Alignment.Bottom
         ) {
-            if (!isMine) {
-                Box(Modifier.width(46.dp), contentAlignment = Alignment.BottomStart) {
-                    if (showAvatar) ParticipantAvatar()
-                }
-                Spacer(Modifier.width(6.dp))
-            }
             Box(
                 modifier = popupAnchorModifier
                     .draggable(
@@ -289,6 +295,8 @@ fun MessageBubble(
                     Modifier
                         .clip(bubbleShape(isMine, groupedWithPrevious, groupedWithNext))
                         .combinedClickable(
+                        interactionSource = messageInteractionSource,
+                        indication = if (replayableExpressiveMessage) null else messageIndication,
                         role = Role.Button,
                         onClickLabel = replayEffectLabel,
                         onClick = {
@@ -345,7 +353,7 @@ fun MessageBubble(
                 message.reactions,
                 reactedByMe,
                 onToggleReaction,
-                Modifier.padding(start = if (isMine) 0.dp else 58.dp, end = if (isMine) 8.dp else 0.dp)
+                Modifier.padding(start = if (isMine) 0.dp else 8.dp, end = if (isMine) 8.dp else 0.dp)
                     .offset(y = (-5).dp)
             )
         }
@@ -631,16 +639,21 @@ private fun MaximumExpressiveMessage(
     val chatColors = LocalChatBubbleColors.current
     val shimmerProgress = remember { Animatable(0f) }
     val twinkleProgress = remember { Animatable(0f) }
+    val waveProgress = remember { Animatable(0f) }
     var playing by remember { mutableStateOf(false) }
+    var wavePlaying by remember { mutableStateOf(false) }
     LaunchedEffect(playbackRequest, motionEnabled) {
         if (playbackRequest <= 0 || !motionEnabled) {
             playing = false
+            wavePlaying = false
             return@LaunchedEffect
         }
+        if (playbackRequest == 1) delay(140)
         playing = true
         try {
             shimmerProgress.snapTo(-0.35f)
             twinkleProgress.snapTo(0f)
+            waveProgress.snapTo(0f)
             coroutineScope {
                 launch {
                     shimmerProgress.animateTo(
@@ -653,6 +666,17 @@ private fun MaximumExpressiveMessage(
                         targetValue = 1f,
                         animationSpec = tween(durationMillis = 820, easing = LinearEasing)
                     )
+                }
+                launch {
+                    wavePlaying = true
+                    try {
+                        waveProgress.animateTo(
+                            targetValue = 1f,
+                            animationSpec = tween(durationMillis = 290, easing = FastOutSlowInEasing)
+                        )
+                    } finally {
+                        wavePlaying = false
+                    }
                 }
             }
         } finally {
@@ -703,9 +727,7 @@ private fun MaximumExpressiveMessage(
                     fontSize = 24.sp,
                     color = chatColors.expressiveEnd
                 )
-                Text(
-                    text,
-                    style = TextStyle(
+                val expressiveTextStyle = TextStyle(
                         brush = shimmerBrush,
                         fontFamily = MaterialTheme.typography.displayLarge.fontFamily,
                         fontWeight = FontWeight.Black,
@@ -713,7 +735,32 @@ private fun MaximumExpressiveMessage(
                         lineHeight = when { text.length <= 8 -> 72.sp; text.length <= 18 -> 58.sp; else -> 47.sp },
                         shadow = Shadow(chatColors.expressiveStart.copy(alpha = 0.22f), blurRadius = 18f)
                     )
+                val waveTextStyle = expressiveTextStyle.copy(
+                    brush = Brush.linearGradient(
+                        listOf(chatColors.expressiveStart, chatColors.expressiveEnd)
+                    )
                 )
+                var textLayoutResult by remember(text) { mutableStateOf<TextLayoutResult?>(null) }
+                val waveOverlayReady = wavePlaying && textLayoutResult != null
+                Box {
+                    Text(
+                        text,
+                        modifier = Modifier.graphicsLayer { alpha = if (waveOverlayReady) 0f else 1f },
+                        style = expressiveTextStyle,
+                        onTextLayout = { result ->
+                            if (textLayoutResult == null) textLayoutResult = result
+                        }
+                    )
+                    if (waveOverlayReady) {
+                        StaggeredScaleText(
+                            text = text,
+                            style = waveTextStyle,
+                            textLayoutResult = textLayoutResult!!,
+                            progress = { waveProgress.value },
+                            modifier = Modifier.matchParentSize()
+                        )
+                    }
+                }
                 Text(
                     "✦",
                     Modifier
@@ -731,6 +778,75 @@ private fun MaximumExpressiveMessage(
                 )
             }
             MessageMeta(sentTime, readTime, status, isMine, edited, showDetails)
+        }
+    }
+}
+
+@Composable
+private fun StaggeredScaleText(
+    text: String,
+    style: TextStyle,
+    textLayoutResult: TextLayoutResult,
+    progress: () -> Float,
+    modifier: Modifier = Modifier
+) {
+    val graphemes = remember(text) { expressiveGraphemes(text) }
+    val graphemeStarts = remember(graphemes) {
+        buildList {
+            var offset = 0
+            graphemes.forEach { grapheme ->
+                add(offset)
+                offset += grapheme.length
+            }
+        }
+    }
+    Layout(
+        content = {
+            graphemes.forEachIndexed { index, grapheme ->
+                if (grapheme == "\n") {
+                    Spacer(Modifier.size(0.dp))
+                } else {
+                    Text(
+                        text = grapheme,
+                        maxLines = 1,
+                        style = style,
+                        modifier = Modifier
+                            .graphicsLayer {
+                                val scale = letterWaveScale(progress(), index, graphemes.size)
+                                scaleX = scale
+                                scaleY = scale
+                            }
+                            .clearAndSetSemantics { }
+                    )
+                }
+            }
+        },
+        modifier = modifier.clearAndSetSemantics { }
+    ) { measurables, constraints ->
+        val looseConstraints = constraints.copy(minWidth = 0, minHeight = 0)
+        val placeables = measurables.map { it.measure(looseConstraints) }
+
+        layout(constraints.maxWidth, constraints.maxHeight) {
+            placeables.forEachIndexed { index, placeable ->
+                if (graphemes[index] != "\n") {
+                    val characterOffset = graphemeStarts[index].coerceIn(0, text.lastIndex)
+                    val line = textLayoutResult.getLineForOffset(characterOffset)
+                    val x = textLayoutResult
+                        .getHorizontalPosition(characterOffset, usePrimaryDirection = true)
+                        .roundToInt()
+                    val childBaseline = placeable[FirstBaseline]
+                        .takeUnless { it == AlignmentLine.Unspecified }
+                        ?: 0
+                    val y = textLayoutResult.getLineBaseline(line).roundToInt() - childBaseline
+                    placeable.placeWithLayer(x, y) {
+                        val scale = letterWaveScale(progress(), index, graphemes.size)
+                        scaleX = scale
+                        scaleY = scale
+                        transformOrigin = TransformOrigin.Center
+                        clip = false
+                    }
+                }
+            }
         }
     }
 }
@@ -805,15 +921,6 @@ private fun ContextAction(icon: androidx.compose.ui.graphics.vector.ImageVector,
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(icon, null, Modifier.size(20.dp))
             Text(label, style = MaterialTheme.typography.labelSmall)
-        }
-    }
-}
-
-@Composable
-private fun ParticipantAvatar() {
-    Surface(Modifier.size(42.dp), CircleShape, MaterialTheme.colorScheme.tertiaryContainer, border = BorderStroke(2.dp, MaterialTheme.colorScheme.surface)) {
-        Box(contentAlignment = Alignment.Center) {
-            Text(stringResource(R.string.contact_initial).take(1).uppercase(), color = MaterialTheme.colorScheme.onTertiaryContainer, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -1031,9 +1138,10 @@ private fun MessageMeta(
 ) {
     val isRead = status == "read"
     if (isRead && !showDetails && !edited) return
+    val metadataColor = LocalContentColor.current
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
         if (edited) {
-            Text(stringResource(R.string.edited), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(stringResource(R.string.edited), style = MaterialTheme.typography.labelSmall, color = metadataColor)
             if (showDetails || !isRead) Spacer(Modifier.width(5.dp))
         }
         if (isRead && showDetails) {
@@ -1041,32 +1149,32 @@ private fun MessageMeta(
                 Text(
                     stringResource(R.string.message_sent_at, sentTime),
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = metadataColor,
                     maxLines = 1
                 )
                 readTime?.let {
                     Text(
                         stringResource(R.string.message_read_at, it),
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = metadataColor,
                         maxLines = 1
                     )
                 }
             }
         } else if (!isRead) {
-            Text(sentTime, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+            Text(sentTime, style = MaterialTheme.typography.labelSmall, color = metadataColor, maxLines = 1)
             if (isMine) {
                 Spacer(Modifier.width(5.dp))
-                ReceiptIcon(status)
+                ReceiptIcon(status, metadataColor)
             }
         }
     }
 }
 
 @Composable
-private fun ReceiptIcon(status: String) {
+private fun ReceiptIcon(status: String, tint: Color) {
     val icon = if (status == "sent" || status == "delivered") Icons.Default.Done else Icons.Default.Schedule
-    Icon(icon, null, Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    Icon(icon, null, Modifier.size(15.dp), tint = tint)
 }
 
 @Composable

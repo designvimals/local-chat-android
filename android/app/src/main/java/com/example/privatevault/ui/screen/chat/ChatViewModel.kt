@@ -15,6 +15,7 @@ import kotlinx.coroutines.launch
 class ChatViewModel(private val chatRepository: ChatRepository) : ViewModel() {
     val messages: StateFlow<List<Message>> = chatRepository.messages
     val viewerConnected: StateFlow<Boolean> = chatRepository.viewerConnected
+    val peerPresence = chatRepository.peerPresence
     val remoteTyping: StateFlow<Boolean> = chatRepository.remoteTyping
     private var typingTimeout: Job? = null
 

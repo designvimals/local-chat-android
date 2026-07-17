@@ -17,7 +17,19 @@ data class ChatBubbleColors(
     val onIncoming: Color,
     val expressiveStart: Color,
     val expressiveEnd: Color
-)
+) {
+    val composerAdd: Color get() = expressiveEnd
+    val onComposerAdd: Color get() = contrastingContentColor(composerAdd)
+    val composerSend: Color get() = expressiveStart
+    val onComposerSend: Color get() = contrastingContentColor(composerSend)
+}
+
+private fun contrastingContentColor(container: Color): Color {
+    val luminance = container.luminance()
+    val whiteContrast = 1.05f / (luminance + 0.05f)
+    val blackContrast = (luminance + 0.05f) / 0.05f
+    return if (whiteContrast >= blackContrast) Color.White else Color.Black
+}
 
 private val LavenderLight = ChatBubbleColors(
     outgoing = Color(0xFFE1E2FF),

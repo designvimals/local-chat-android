@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
@@ -474,8 +475,8 @@ private fun ComposerActionButton(
         modifier = Modifier.size(48.dp),
         shape = CircleShape,
         colors = IconButtonDefaults.filledTonalIconButtonColors(
-            containerColor = chatColors.outgoing,
-            contentColor = chatColors.onOutgoing
+            containerColor = chatColors.composerAdd,
+            contentColor = chatColors.onComposerAdd
         )
     ) {
         Icon(icon, contentDescription = description, modifier = Modifier.size(25.dp))
@@ -736,8 +737,8 @@ private fun ExpressiveSendControl(
                 onClick { if (enabled) { latestQuickSend(); true } else false }
             },
         shape = CircleShape,
-        color = chatColors.outgoing,
-        contentColor = chatColors.onOutgoing,
+        color = chatColors.composerSend,
+        contentColor = chatColors.onComposerSend,
         shadowElevation = 4.dp
     ) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -749,7 +750,7 @@ private fun ExpressiveSendControl(
             ) {
                 Canvas(Modifier.fillMaxSize().padding(4.dp)) {
                     drawArc(
-                        color = chatColors.onOutgoing.copy(alpha = 0.76f),
+                        color = chatColors.onComposerSend.copy(alpha = 0.76f),
                         startAngle = -90f,
                         sweepAngle = 360f * state.progress,
                         useCenter = false,
@@ -757,7 +758,13 @@ private fun ExpressiveSendControl(
                     )
                 }
             }
-            Icon(Icons.AutoMirrored.Filled.Send, null, Modifier.size(25.dp))
+            Icon(
+                Icons.AutoMirrored.Filled.Send,
+                contentDescription = null,
+                modifier = Modifier
+                    .size(24.dp)
+                    .offset(x = 1.dp)
+            )
         }
     }
 }
