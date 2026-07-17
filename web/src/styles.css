@@ -267,6 +267,26 @@ h2 {
   font-weight: 700;
 }
 
+.brand-status-dot {
+  width: 9px;
+  height: 9px;
+  margin-left: 1px;
+  border: 2px solid var(--paper);
+  border-radius: 999px;
+  background: #87928d;
+  box-shadow: 0 0 0 1px rgba(31, 52, 47, 0.14);
+}
+
+.brand-status-dot.online {
+  background: #2d9b63;
+  box-shadow: 0 0 0 3px rgba(45, 155, 99, 0.14);
+}
+
+.brand-status-dot.connecting {
+  background: #d49a3a;
+  animation: status-pulse 1.6s ease-in-out infinite;
+}
+
 .brand-mark {
   width: 39px;
   height: 39px;
@@ -543,6 +563,10 @@ h2 {
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
+
+@keyframes status-pulse {
+  50% { opacity: 0.45; transform: scale(0.82); }
+}
 
 .message-bubble footer {
   min-height: 16px;

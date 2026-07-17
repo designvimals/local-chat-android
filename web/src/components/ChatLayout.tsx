@@ -222,6 +222,8 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
 
   const storageOpen = route === "/storage";
   const compactStorage = storageOpen && window.matchMedia("(max-width: 760px)").matches;
+  const connectionState = online ? "online" : relayConnected ? "connecting" : "offline";
+  const connectionLabel = online ? "Phone online" : relayConnected ? "Relay reconnecting" : "Phone offline";
   if (compactStorage) {
     return (
       <main id="main" className="mobile-storage-page">
@@ -241,6 +243,12 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
         <div className="brand-lockup">
           <span className="brand-mark" aria-hidden><MessageCircle size={22} /></span>
           <span>Between</span>
+          <span
+            className={`brand-status-dot ${connectionState}`}
+            role="img"
+            aria-label={connectionLabel}
+            title={connectionLabel}
+          />
         </div>
         <div className="connection-card">
           <div className="friend-avatar" aria-hidden>{session.friendName.slice(0, 1).toUpperCase()}</div>
