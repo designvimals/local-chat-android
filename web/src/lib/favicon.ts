@@ -1,13 +1,15 @@
-export type FaviconStatus = "online" | "offline" | "connecting";
+export type FaviconStatus = "online" | "available" | "offline" | "connecting";
 
 const STATUS_COLORS: Record<FaviconStatus, string> = {
   online: "#2d9b63",
+  available: "#d49a3a",
   offline: "#87928d",
   connecting: "#d49a3a"
 };
 
 const STATUS_LABELS: Record<FaviconStatus, string> = {
   online: "Online",
+  available: "Available",
   offline: "Offline",
   connecting: "Reconnecting"
 };

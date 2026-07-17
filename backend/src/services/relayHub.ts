@@ -18,6 +18,7 @@ const deviceRegistrationSchema = z.object({
   accessToken: z.string().min(32).max(256),
   pairingAvailable: z.boolean(),
   pairedClientTypes: z.array(z.enum(PAIRING_CLIENT_TYPES)).max(PAIRING_CLIENT_TYPES.length).optional(),
+  chatVisible: z.boolean().optional().default(false),
   storageSharingEnabled: z.boolean()
 });
 
@@ -66,6 +67,7 @@ interface RegisteredDevice {
   pairingCode: string;
   accessToken: string;
   claimedClientTypes: Set<PairingClientType>;
+  chatVisible: boolean;
   storageSharingEnabled: boolean;
 }
 
@@ -217,6 +219,7 @@ export class RelayHub {
         parsed.data.pairedClientTypes,
         parsed.data.pairingAvailable
       ),
+      chatVisible: parsed.data.chatVisible,
       storageSharingEnabled: parsed.data.storageSharingEnabled
     };
     this.identities.set(socket, { role: "device", accessToken: device.accessToken });
@@ -225,7 +228,7 @@ export class RelayHub {
       this.devicesByCode.set(device.pairingCode, device);
     }
     this.send(socket, { type: "device.registered" });
-    this.broadcastStatus(device.accessToken, true, device.storageSharingEnabled);
+    this.broadcastStatus(device.accessToken, true, device.chatVisible, device.storageSharingEnabled);
     console.info(`Relay device connected: ${device.deviceName} (${device.deviceId})`);
   }
 
@@ -244,7 +247,9 @@ export class RelayHub {
     const device = this.devicesByToken.get(accessToken);
     this.send(socket, {
       type: "viewer.registered",
-      online: device?.socket.readyState === WebSocket.OPEN,
+      online: device?.socket.readyState === WebSocket.OPEN && device.chatVisible,
+      available: device?.socket.readyState === WebSocket.OPEN,
+      chatOnline: device?.socket.readyState === WebSocket.OPEN && device.chatVisible,
       storageSharingEnabled: device?.storageSharingEnabled ?? false,
       deviceName: device?.deviceName ?? null
     });
@@ -303,13 +308,19 @@ export class RelayHub {
   private updateDevice(accessToken: string, message: Record<string, unknown>): void {
     const parsed = z.object({
       type: z.literal("device.update"),
-      storageSharingEnabled: z.boolean()
+      storageSharingEnabled: z.boolean().optional(),
+      chatVisible: z.boolean().optional()
     }).safeParse(message);
     if (!parsed.success) return;
     const device = this.devicesByToken.get(accessToken);
     if (!device) return;
-    device.storageSharingEnabled = parsed.data.storageSharingEnabled;
-    this.broadcastStatus(accessToken, true, device.storageSharingEnabled);
+    if (parsed.data.storageSharingEnabled !== undefined) {
+      device.storageSharingEnabled = parsed.data.storageSharingEnabled;
+    }
+    if (parsed.data.chatVisible !== undefined) {
+      device.chatVisible = parsed.data.chatVisible;
+    }
+    this.broadcastStatus(accessToken, true, device.chatVisible, device.storageSharingEnabled);
   }
 
   private detach(socket: WebSocket): void {
@@ -324,7 +335,7 @@ export class RelayHub {
         if (this.devicesByCode.get(device.pairingCode)?.socket === socket) {
           this.devicesByCode.delete(device.pairingCode);
         }
-        this.broadcastStatus(identity.accessToken, false, false);
+        this.broadcastStatus(identity.accessToken, false, false, false);
       }
       return;
     }
@@ -340,9 +351,20 @@ export class RelayHub {
     }
   }
 
-  private broadcastStatus(accessToken: string, online: boolean, storageSharingEnabled: boolean): void {
+  private broadcastStatus(
+    accessToken: string,
+    available: boolean,
+    chatOnline: boolean,
+    storageSharingEnabled: boolean
+  ): void {
     for (const viewer of this.viewersByToken.get(accessToken) ?? []) {
-      this.send(viewer, { type: "device.status", online, storageSharingEnabled });
+      this.send(viewer, {
+        type: "device.status",
+        online: chatOnline,
+        available,
+        chatOnline,
+        storageSharingEnabled
+      });
     }
   }
 

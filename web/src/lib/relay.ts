@@ -3,6 +3,7 @@ import { backendBaseUrl } from "./api";
 export interface RelayStatus {
   relayConnected: boolean;
   deviceOnline: boolean;
+  chatOnline: boolean;
   storageSharingEnabled: boolean;
 }
 
@@ -40,6 +41,7 @@ export class RelayClient {
   private status: RelayStatus = {
     relayConnected: false,
     deviceOnline: false,
+    chatOnline: false,
     storageSharingEnabled: false
   };
   private readonly listeners = new Set<StatusListener>();
@@ -165,7 +167,8 @@ export class RelayClient {
       this.registered = true;
       this.setStatus({
         relayConnected: true,
-        deviceOnline: message.online === true,
+        deviceOnline: message.available === true || (message.available === undefined && message.online === true),
+        chatOnline: message.chatOnline === true || (message.chatOnline === undefined && message.available === undefined && message.online === true),
         storageSharingEnabled: message.storageSharingEnabled === true
       });
       return;
@@ -173,7 +176,8 @@ export class RelayClient {
     if (type === "device.status") {
       this.setStatus({
         relayConnected: true,
-        deviceOnline: message.online === true,
+        deviceOnline: message.available === true || (message.available === undefined && message.online === true),
+        chatOnline: message.chatOnline === true || (message.chatOnline === undefined && message.available === undefined && message.online === true),
         storageSharingEnabled: message.storageSharingEnabled === true
       });
       return;
@@ -228,7 +232,7 @@ export class RelayClient {
   private handleDisconnect(): void {
     this.socket = null;
     this.registered = false;
-    this.setStatus({ relayConnected: false, deviceOnline: false, storageSharingEnabled: false });
+    this.setStatus({ relayConnected: false, deviceOnline: false, chatOnline: false, storageSharingEnabled: false });
     this.rejectPending("Relay connection lost.");
     if (!this.closed) {
       this.reconnectTimer = window.setTimeout(() => this.connect(), 2_000);

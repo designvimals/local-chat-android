@@ -763,7 +763,7 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
               <strong>{pendingBatch.files.length - pendingBatch.nextIndex} {pendingBatch.mode === "zip" ? "files" : "downloads"} waiting</strong>
               <span>
                 {pendingBatch.nextIndex} of {pendingBatch.files.length} completed. Progress is saved in this browser
-                {deviceOnline ? "." : " and will resume when the phone is online."}
+                {deviceOnline ? "." : " and will resume when the phone is available."}
               </span>
             </div>
             <div className="download-resume-actions">

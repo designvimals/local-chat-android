@@ -33,6 +33,7 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
   const messagesRef = useRef(messages);
   const syncingRef = useRef(false);
   const [relayConnected, setRelayConnected] = useState(false);
+  const [available, setAvailable] = useState(false);
   const [online, setOnline] = useState(false);
   const [storageEnabled, setStorageEnabled] = useState(false);
   const [lastSeen, setLastSeen] = useState<string | null>(null);
@@ -94,7 +95,6 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
       setRemoteTyping(remote.typing === true);
       commitMessages(mergeMessages(messagesRef.current, remote.messages));
       setError(null);
-      setLastSeen(new Date().toISOString());
     } catch (caught) {
       if (messagesRef.current.length === 0) {
         setError(caught instanceof Error ? caught.message : "The phone is offline.");
@@ -108,9 +108,10 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
   useEffect(() => {
     const unsubscribe = relay.subscribe((status) => {
       setRelayConnected(status.relayConnected);
-      setOnline(status.deviceOnline);
+      setAvailable(status.deviceOnline);
+      setOnline(status.chatOnline);
       setStorageEnabled(status.storageSharingEnabled);
-      if (status.deviceOnline) setLastSeen(new Date().toISOString());
+      if (status.chatOnline) setLastSeen(new Date().toISOString());
     });
     relay.connect();
     return () => {
@@ -120,13 +121,13 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
   }, [relay]);
 
   useEffect(() => {
-    const status = online ? "online" : relayConnected ? "offline" : "connecting";
+    const status = online ? "online" : available ? "available" : relayConnected ? "offline" : "connecting";
     setFaviconStatus(status);
     setDocumentTitle(status);
-  }, [online, relayConnected]);
+  }, [available, online, relayConnected]);
 
   useEffect(() => {
-    if (online) void sync();
+    if (available) void sync();
     const timer = window.setInterval(() => void sync(), 4000);
     const onVisible = () => {
       if (document.visibilityState === "visible") void sync();
@@ -138,14 +139,15 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("online", onVisible);
     };
-  }, [online, sync]);
+  }, [available, sync]);
 
   const statusText = useMemo(() => {
     if (online) return storageEnabled ? "Online · Files available" : "Online · Files paused";
+    if (available) return storageEnabled ? "Available · Files available" : "Available · Files paused";
     if (!relayConnected) return "Relay reconnecting · Messages will wait";
     if (!lastSeen) return "Phone offline · Messages will wait";
-    return `Last connected ${new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(lastSeen))}`;
-  }, [lastSeen, online, relayConnected, storageEnabled]);
+    return `Chat last open ${new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(lastSeen))}`;
+  }, [available, lastSeen, online, relayConnected, storageEnabled]);
 
   async function handleSend(text: string) {
     const message: Message = {
@@ -224,8 +226,8 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
 
   const storageOpen = route === "/storage";
   const compactStorage = storageOpen && window.matchMedia("(max-width: 760px)").matches;
-  const connectionState = online ? "online" : relayConnected ? "connecting" : "offline";
-  const connectionLabel = online ? "Phone online" : relayConnected ? "Relay reconnecting" : "Phone offline";
+  const connectionState = online ? "online" : available ? "available" : relayConnected ? "offline" : "connecting";
+  const connectionLabel = online ? "Chat screen open" : available ? "Phone available" : relayConnected ? "Phone offline" : "Relay reconnecting";
   if (compactStorage) {
     return (
       <main id="main" className="mobile-storage-page">
@@ -256,7 +258,9 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
           <div className="friend-avatar" aria-hidden>{session.friendName.slice(0, 1).toUpperCase()}</div>
           <div className="friend-copy">
             <strong>{session.friendName}</strong>
-            <span className={online ? "presence online" : "presence"}>{online ? "Online" : "Offline"}</span>
+            <span className={`presence ${online ? "online" : available ? "available" : ""}`}>
+              {online ? "Online" : available ? "Available" : "Offline"}
+            </span>
           </div>
         </div>
         <div className="privacy-note">
@@ -275,7 +279,7 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
             <div>
               <p className="eyebrow">Private conversation</p>
               <h1>{session.friendName}</h1>
-              <p className="chat-status"><span className={online ? "status-dot online" : "status-dot"} />{statusText}</p>
+              <p className="chat-status"><span className={`status-dot ${online ? "online" : available ? "available" : ""}`} />{statusText}</p>
             </div>
           </div>
           <div className="header-actions">
@@ -327,7 +331,7 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
               <button type="button" onClick={undoDeleteMessage}>Undo</button>
             </div>
           ) : null}
-          {!online ? <p className="queue-hint">Offline — send now and it will leave when the phone reconnects.</p> : null}
+          {!available ? <p className="queue-hint">Offline — send now and it will leave when the phone reconnects.</p> : null}
           <MessageInput onOpenStorage={() => navigate("/storage")} onSend={handleSend} onTyping={handleTyping} />
         </div>
       </main>

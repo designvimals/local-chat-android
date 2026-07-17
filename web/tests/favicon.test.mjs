@@ -4,6 +4,7 @@ import { appTitleForStatus, buildFaviconDataUri } from "../src/lib/favicon.ts";
 
 test("tab title names the current connection state", () => {
   assert.equal(appTitleForStatus("online"), "Between · Online");
+  assert.equal(appTitleForStatus("available"), "Between · Available");
   assert.equal(appTitleForStatus("connecting"), "Between · Reconnecting");
   assert.equal(appTitleForStatus("offline"), "Between · Offline");
 });
@@ -20,4 +21,8 @@ test("favicon data URI differentiates offline and reconnecting states", () => {
   assert.match(offline, /#87928d/);
   assert.match(connecting, /#d49a3a/);
   assert.notEqual(offline, connecting);
+});
+
+test("favicon data URI uses a distinct available color", () => {
+  assert.match(decodeURIComponent(buildFaviconDataUri("available")), /#d49a3a/);
 });

@@ -44,7 +44,7 @@ export function createAuthRouter(relay: RelayHub): Router {
       const active = current && current.resetsAt > now ? current : { count: 0, resetsAt: now + 10 * 60_000 };
       attempts.set(clientId, { ...active, count: active.count + 1 });
       response.status(401).json({
-        error: "No online phone is advertising that code. Check the phone's relay status or create a new code."
+        error: "No available phone is advertising that code. Check the phone's relay status or create a new code."
       });
       return;
     }
