@@ -3,7 +3,7 @@ import { KeyRound } from "lucide-react";
 import { login } from "./lib/api";
 import { loadSession, saveSession } from "./lib/auth";
 import { currentRoute, navigate, type AppRoute } from "./lib/navigation";
-import { setFaviconStatus } from "./lib/favicon";
+import { setDocumentTitle, setFaviconStatus } from "./lib/favicon";
 import type { AuthSession } from "./types/api";
 import { ChatLayout } from "./components/ChatLayout";
 
@@ -12,7 +12,10 @@ export function App() {
   const [session, setSession] = useState<AuthSession | null>(() => loadSession());
 
   useEffect(() => {
-    if (!session) setFaviconStatus("offline");
+    if (!session) {
+      setFaviconStatus("offline");
+      setDocumentTitle("offline");
+    }
   }, [session]);
 
   useEffect(() => {

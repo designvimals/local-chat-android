@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildFaviconDataUri } from "../src/lib/favicon.ts";
+import { appTitleForStatus, buildFaviconDataUri } from "../src/lib/favicon.ts";
+
+test("tab title names the current connection state", () => {
+  assert.equal(appTitleForStatus("online"), "Between · Online");
+  assert.equal(appTitleForStatus("connecting"), "Between · Reconnecting");
+  assert.equal(appTitleForStatus("offline"), "Between · Offline");
+});
 
 test("favicon data URI carries the online status color", () => {
   const favicon = buildFaviconDataUri("online");
