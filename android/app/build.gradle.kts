@@ -36,8 +36,8 @@ android {
         applicationId = "com.example.privatevault"
         minSdk = 26
         targetSdk = 37
-        versionCode = 11
-        versionName = "0.3.5"
+        versionCode = 16
+        versionName = "0.4.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         val releaseRequested = gradle.startParameter.taskNames.any { task ->
