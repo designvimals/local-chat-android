@@ -1,4 +1,4 @@
-import { Check, CheckCheck, CircleAlert, Clock3, Download, File, LoaderCircle } from "lucide-react";
+import { Check, CheckCheck, CircleAlert, Clock3, Download, File, LoaderCircle, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatAttachment, Message } from "../../../shared/api-contracts/types";
 import { RelayClient } from "../lib/relay";
@@ -8,6 +8,7 @@ interface MessageListProps {
   viewerDeviceId: string;
   relay: RelayClient;
   remoteTyping: boolean;
+  onDeleteMessage: (messageId: string) => void;
 }
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -15,7 +16,7 @@ const timeFormatter = new Intl.DateTimeFormat(undefined, {
   minute: "2-digit"
 });
 
-export function MessageList({ messages, viewerDeviceId, relay, remoteTyping }: MessageListProps) {
+export function MessageList({ messages, viewerDeviceId, relay, remoteTyping, onDeleteMessage }: MessageListProps) {
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -42,6 +43,15 @@ export function MessageList({ messages, viewerDeviceId, relay, remoteTyping }: M
               {message.attachment ? <AttachmentPreview attachment={message.attachment} relay={relay} /> : null}
               {message.text ? <p>{message.text}</p> : null}
               <footer>
+                <button
+                  type="button"
+                  className="message-delete-button"
+                  onClick={() => onDeleteMessage(message.id)}
+                  aria-label={`Delete message from this browser, sent ${timeFormatter.format(new Date(message.timestamp))}`}
+                  title="Delete from this browser"
+                >
+                  <Trash2 aria-hidden size={13} />
+                </button>
                 <time dateTime={message.timestamp}>{timeFormatter.format(new Date(message.timestamp))}</time>
                 {mine ? <MessageReceipt status={message.status} /> : null}
               </footer>

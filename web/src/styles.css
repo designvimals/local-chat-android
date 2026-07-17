@@ -551,6 +551,25 @@ h2 {
   opacity: 0.68;
 }
 
+.message-delete-button {
+  width: 28px;
+  height: 28px;
+  margin: -7px 1px -6px -7px;
+  border: 0;
+  border-radius: 9px;
+  display: inline-grid;
+  place-items: center;
+  color: inherit;
+  background: transparent;
+  opacity: 0.72;
+}
+
+.message-delete-button:hover,
+.message-delete-button:focus-visible {
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  opacity: 1;
+}
+
 .receipt { display: inline-flex; }
 .receipt.read { color: #8ed7ff; opacity: 1; }
 .receipt.failed { color: #ffd497; opacity: 1; }
@@ -601,6 +620,32 @@ h2 {
 .composer-shell {
   border-top: 1px solid var(--line);
   background: rgba(255, 253, 247, 0.82);
+}
+
+.message-delete-notice {
+  min-height: 44px;
+  margin: 10px 12px 0;
+  border: 1px solid rgba(23, 32, 29, 0.12);
+  border-radius: 13px;
+  padding: 7px 8px 7px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--ink);
+  background: var(--yellow-soft);
+  box-shadow: var(--direct);
+  font-size: 0.8rem;
+}
+
+.message-delete-notice button {
+  min-width: 58px;
+  min-height: 32px;
+  border: 1px solid rgba(22, 79, 70, 0.18);
+  border-radius: 10px;
+  color: var(--evergreen);
+  background: rgba(255, 255, 255, 0.74);
+  font-weight: 750;
 }
 
 .queue-hint {
@@ -1072,6 +1117,7 @@ h2 {
   .folder-button span { display: none; }
   .message-list { padding: 18px 12px; }
   .message-bubble { max-width: 88%; }
+  .message-delete-button { width: 44px; height: 44px; margin: -15px 0 -14px -13px; }
   .message-input { grid-template-columns: 44px minmax(0, 1fr) 48px; }
   .send-button { width: 48px; padding: 0; }
   .send-button span { display: none; }

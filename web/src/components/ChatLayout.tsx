@@ -1,7 +1,14 @@
 import { HardDrive, LogOut, MessageCircle, RefreshCw, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { clearSession } from "../lib/auth";
-import { loadLocalMessages, mergeMessages, saveLocalMessages } from "../lib/chatStore";
+import {
+  filterDeletedMessages,
+  loadDeletedMessageIds,
+  loadLocalMessages,
+  mergeMessages,
+  saveDeletedMessageIds,
+  saveLocalMessages
+} from "../lib/chatStore";
 import { navigate } from "../lib/navigation";
 import { RelayClient } from "../lib/relay";
 import type { AuthSession, Message } from "../types/api";
@@ -17,7 +24,10 @@ interface ChatLayoutProps {
 
 export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
   const [relay] = useState(() => new RelayClient(session.pairedToken));
-  const [messages, setMessages] = useState<Message[]>(() => loadLocalMessages(session));
+  const [deletedMessageIds] = useState(() => loadDeletedMessageIds(session));
+  const [messages, setMessages] = useState<Message[]>(() => (
+    filterDeletedMessages(loadLocalMessages(session), deletedMessageIds)
+  ));
   const messagesRef = useRef(messages);
   const syncingRef = useRef(false);
   const [relayConnected, setRelayConnected] = useState(false);
@@ -27,14 +37,16 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [remoteTyping, setRemoteTyping] = useState(false);
+  const [recentlyDeleted, setRecentlyDeleted] = useState<Message | null>(null);
   const typingStateRef = useRef(false);
 
   const commitMessages = useCallback((next: Message[]) => {
-    const sorted = [...next].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+    const sorted = filterDeletedMessages(next, deletedMessageIds)
+      .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
     messagesRef.current = sorted;
     saveLocalMessages(session, sorted);
     setMessages(sorted);
-  }, [session]);
+  }, [deletedMessageIds, session]);
 
   const sync = useCallback(async () => {
     if (syncingRef.current || !relay.isDeviceOnline()) {
@@ -146,6 +158,29 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
     }
   }, [relay]);
 
+  const handleDeleteMessage = useCallback((messageId: string) => {
+    const message = messagesRef.current.find((candidate) => candidate.id === messageId);
+    if (!message) return;
+    deletedMessageIds.add(messageId);
+    saveDeletedMessageIds(session, deletedMessageIds);
+    commitMessages(messagesRef.current.filter((candidate) => candidate.id !== messageId));
+    setRecentlyDeleted(message);
+  }, [commitMessages, deletedMessageIds, session]);
+
+  const undoDeleteMessage = useCallback(() => {
+    if (!recentlyDeleted) return;
+    deletedMessageIds.delete(recentlyDeleted.id);
+    saveDeletedMessageIds(session, deletedMessageIds);
+    commitMessages([...messagesRef.current, recentlyDeleted]);
+    setRecentlyDeleted(null);
+  }, [commitMessages, deletedMessageIds, recentlyDeleted, session]);
+
+  useEffect(() => {
+    if (!recentlyDeleted) return;
+    const timer = window.setTimeout(() => setRecentlyDeleted(null), 12_000);
+    return () => window.clearTimeout(timer);
+  }, [recentlyDeleted]);
+
   function signOut() {
     relay.close();
     clearSession();
@@ -220,11 +255,18 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
               viewerDeviceId={session.viewerDeviceId}
               relay={relay}
               remoteTyping={remoteTyping}
+              onDeleteMessage={handleDeleteMessage}
             />
           ) : null}
         </div>
 
         <div className="composer-shell">
+          {recentlyDeleted ? (
+            <div className="message-delete-notice" role="status" aria-live="polite">
+              <span>Deleted from this browser. The phone copy is unchanged.</span>
+              <button type="button" onClick={undoDeleteMessage}>Undo</button>
+            </div>
+          ) : null}
           {!online ? <p className="queue-hint">Offline — send now and it will leave when the phone reconnects.</p> : null}
           <MessageInput onOpenStorage={() => navigate("/storage")} onSend={handleSend} onTyping={handleTyping} />
         </div>
