@@ -353,6 +353,7 @@ h2 {
   height: calc(100vh - 32px);
   border-radius: 28px;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
 }
@@ -366,7 +367,7 @@ h2 {
   border-bottom: 1px solid var(--line);
 }
 
-.chat-identity { min-width: 0; display: flex; align-items: center; gap: 12px; }
+.chat-identity { min-width: 0; flex: 1 1 auto; display: flex; align-items: center; gap: 12px; overflow: hidden; }
 .chat-identity > div:last-child { min-width: 0; }
 
 .chat-header h1 {
@@ -398,7 +399,7 @@ h2 {
 
 .status-dot.online { background: #2d9b63; }
 
-.header-actions { display: flex; align-items: center; gap: 8px; }
+.header-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
 
 .icon-button {
   width: 44px;
@@ -418,6 +419,9 @@ h2 {
   color: #123d37;
   background: var(--mint);
 }
+
+.export-chat-button { background: var(--orange-soft); }
+.export-spinner { animation: spin 800ms linear infinite; }
 
 .chat-body {
   min-height: 0;
@@ -534,7 +538,8 @@ h2 {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .attachment-loading svg { animation: none; }
+  .attachment-loading svg,
+  .export-spinner { animation: none; }
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -647,6 +652,14 @@ h2 {
   background: rgba(255, 255, 255, 0.74);
   font-weight: 750;
 }
+
+.export-notice {
+  justify-content: flex-start;
+  color: var(--evergreen);
+  background: var(--mint);
+}
+
+.export-notice span { min-width: 0; overflow-wrap: anywhere; }
 
 .queue-hint {
   margin: 0;
@@ -1112,7 +1125,7 @@ h2 {
 
   .chat-header .eyebrow { display: none; }
   .chat-header h1 { font-family: inherit; font-size: 1.05rem; letter-spacing: -0.01em; }
-  .chat-status { max-width: 48vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.75rem; }
+  .chat-status { width: 100%; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.75rem; }
   .folder-button { width: 44px; padding: 0; }
   .folder-button span { display: none; }
   .message-list { padding: 18px 12px; }

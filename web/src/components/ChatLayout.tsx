@@ -1,6 +1,7 @@
-import { HardDrive, LogOut, MessageCircle, RefreshCw, ShieldCheck } from "lucide-react";
+import { Download, HardDrive, LoaderCircle, LogOut, MessageCircle, RefreshCw, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { clearSession } from "../lib/auth";
+import { buildChatExport } from "../lib/chatExport";
 import {
   filterDeletedMessages,
   loadDeletedMessageIds,
@@ -38,6 +39,8 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
   const [error, setError] = useState<string | null>(null);
   const [remoteTyping, setRemoteTyping] = useState(false);
   const [recentlyDeleted, setRecentlyDeleted] = useState<Message | null>(null);
+  const [exportingChat, setExportingChat] = useState(false);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
   const typingStateRef = useRef(false);
 
   const commitMessages = useCallback((next: Message[]) => {
@@ -181,6 +184,30 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
     return () => window.clearTimeout(timer);
   }, [recentlyDeleted]);
 
+  const handleExportChat = useCallback(async () => {
+    if (exportingChat || messagesRef.current.length === 0) return;
+    setExportingChat(true);
+    setExportNotice(null);
+    try {
+      const chatExport = await buildChatExport(messagesRef.current, {
+        friendName: session.friendName,
+        viewerDeviceId: session.viewerDeviceId
+      });
+      saveBlob(chatExport.blob, chatExport.fileName);
+      setExportNotice("Chat export saved. Attachment files are listed but not included.");
+    } catch {
+      setExportNotice("The chat export could not be created. Try again.");
+    } finally {
+      setExportingChat(false);
+    }
+  }, [exportingChat, session.friendName, session.viewerDeviceId]);
+
+  useEffect(() => {
+    if (!exportNotice) return;
+    const timer = window.setTimeout(() => setExportNotice(null), 8_000);
+    return () => window.clearTimeout(timer);
+  }, [exportNotice]);
+
   function signOut() {
     relay.close();
     clearSession();
@@ -237,6 +264,18 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
             </div>
           </div>
           <div className="header-actions">
+            <button
+              type="button"
+              className="folder-button export-chat-button"
+              onClick={() => void handleExportChat()}
+              disabled={messages.length === 0 || exportingChat}
+              aria-label="Export chat as a ZIP file"
+              aria-busy={exportingChat}
+              title={messages.length === 0 ? "No messages to export" : "Export messages and metadata"}
+            >
+              {exportingChat ? <LoaderCircle className="export-spinner" aria-hidden size={18} /> : <Download aria-hidden size={18} />}
+              <span>Export chat</span>
+            </button>
             <button type="button" className="icon-button" onClick={() => void sync()} aria-label="Sync chat">
               <RefreshCw aria-hidden size={18} />
             </button>
@@ -261,6 +300,12 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
         </div>
 
         <div className="composer-shell">
+          {exportNotice ? (
+            <div className="message-delete-notice export-notice" role="status" aria-live="polite">
+              <Download aria-hidden size={16} />
+              <span>{exportNotice}</span>
+            </div>
+          ) : null}
           {recentlyDeleted ? (
             <div className="message-delete-notice" role="status" aria-live="polite">
               <span>Deleted from this browser. The phone copy is unchanged.</span>
@@ -281,4 +326,16 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
       ) : null}
     </div>
   );
+}
+
+function saveBlob(blob: Blob, name: string) {
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = name;
+  anchor.rel = "noopener";
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000);
 }
