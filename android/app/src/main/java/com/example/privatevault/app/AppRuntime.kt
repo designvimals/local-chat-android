@@ -39,7 +39,8 @@ class AppRuntime(context: Context) {
         chatRepository = chatRepository,
         pathResolver = pathResolver,
         settingsStore = settingsStore,
-        attachmentManager = attachmentManager
+        attachmentManager = attachmentManager,
+        chatVisibilityTracker = chatVisibilityTracker
     )
     val peerRelayClient = PeerRelayClient(
         tokenStore = tokenStore,

@@ -110,7 +110,10 @@ class MainActivity : ComponentActivity() {
                         onThemePreferenceChanged = { preference ->
                             lifecycleScope.launch { settingsStore.setThemePreference(preference) }
                         },
-                        onChatVisibilityChanged = runtime.chatVisibilityTracker::setChatDestinationSelected
+                        onChatVisibilityChanged = { selected ->
+                            runtime.chatVisibilityTracker.setChatDestinationSelected(selected)
+                            notifyChatVisibility()
+                        }
                     )
                 }
             }
@@ -121,6 +124,7 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         if (resetInProgress) return
         (application as PrivateVaultApplication).runtime.chatVisibilityTracker.setActivityForeground(true)
+        notifyChatVisibility()
         appLockManager.onAppForegrounded()
         lifecycleScope.launch {
             if (BuildConfig.LOCAL_ONLY) {
@@ -153,6 +157,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         (application as PrivateVaultApplication).runtime.chatVisibilityTracker.setActivityForeground(false)
+        notifyChatVisibility()
         appLockManager.onAppBackgrounded()
         super.onStop()
     }
@@ -183,6 +188,15 @@ class MainActivity : ComponentActivity() {
             val storageAvailable = settingsStore.storageSharingEnabled.first() &&
                 hasStorageAccess(this@MainActivity)
             notifier.markAvailable(storageAvailable)
+        }
+    }
+
+    private fun notifyChatVisibility() {
+        if (BuildConfig.LOCAL_ONLY || !::backendClient.isInitialized) return
+        lifecycleScope.launch {
+            backendClient.updateChatVisibility(
+                (application as PrivateVaultApplication).runtime.chatVisibilityTracker.isChatVisible
+            )
         }
     }
 

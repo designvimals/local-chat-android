@@ -3,6 +3,7 @@ package com.example.privatevault.network
 import android.util.Base64
 import com.example.privatevault.attachment.AttachmentManager
 import com.example.privatevault.BuildConfig
+import com.example.privatevault.app.ChatVisibilityTracker
 import com.example.privatevault.data.local.SettingsStore
 import com.example.privatevault.data.local.PairingClientType
 import com.example.privatevault.data.local.TokenStore
@@ -55,6 +56,7 @@ class BackendClient(
     private val pathResolver: PathResolver,
     private val settingsStore: SettingsStore,
     private val attachmentManager: AttachmentManager,
+    private val chatVisibilityTracker: ChatVisibilityTracker,
     private val baseUrl: String = BuildConfig.BACKEND_URL
 ) {
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -101,6 +103,15 @@ class BackendClient(
             buildJsonObject {
                 put("type", "device.update")
                 put("storageSharingEnabled", enabled)
+            }
+        )
+    }
+
+    suspend fun updateChatVisibility(visible: Boolean) {
+        activeSession?.sendJson(
+            buildJsonObject {
+                put("type", "device.update")
+                put("chatVisible", visible)
             }
         )
     }
@@ -167,7 +178,9 @@ class BackendClient(
             }
             "device.status.get" -> respond(session, message) {
                 buildJsonObject {
-                    put("online", true)
+                    put("online", chatVisibilityTracker.isChatVisible)
+                    put("available", true)
+                    put("chatOnline", chatVisibilityTracker.isChatVisible)
                     put("storageSharingEnabled", storageAllowed())
                     put("deviceName", deviceRepository.deviceName)
                 }
@@ -303,6 +316,7 @@ class BackendClient(
             put("accessToken", tokenStore.getAccessToken())
             put("pairingAvailable", tokenStore.hasOpenPairingSlot())
             put("pairedClientTypes", json.encodeToJsonElement(tokenStore.claimedPairingClientTypes()))
+            put("chatVisible", chatVisibilityTracker.isChatVisible)
             put("storageSharingEnabled", storageSharingEnabled)
         }
     }
