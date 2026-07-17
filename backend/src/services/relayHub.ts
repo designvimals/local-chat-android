@@ -1,6 +1,13 @@
 import { timingSafeEqual } from "node:crypto";
 import WebSocket, { type RawData } from "ws";
 import { z } from "zod";
+import {
+  canClaimPairingSlot,
+  hasOpenPairingSlot,
+  normalizeClaimedClientTypes,
+  PAIRING_CLIENT_TYPES,
+  type PairingClientType
+} from "./pairingSlots.js";
 
 const deviceRegistrationSchema = z.object({
   type: z.literal("register.device"),
@@ -10,6 +17,7 @@ const deviceRegistrationSchema = z.object({
   pairingCode: z.string().regex(/^\d{6}$/),
   accessToken: z.string().min(32).max(256),
   pairingAvailable: z.boolean(),
+  pairedClientTypes: z.array(z.enum(PAIRING_CLIENT_TYPES)).max(PAIRING_CLIENT_TYPES.length).optional(),
   storageSharingEnabled: z.boolean()
 });
 
@@ -57,7 +65,7 @@ interface RegisteredDevice {
   deviceName: string;
   pairingCode: string;
   accessToken: string;
-  pairingAvailable: boolean;
+  claimedClientTypes: Set<PairingClientType>;
   storageSharingEnabled: boolean;
 }
 
@@ -75,7 +83,7 @@ export interface PairingClaim {
 export interface PairingViewer {
   viewerDeviceId: string;
   deviceName: string;
-  clientType: "web" | "android";
+  clientType: PairingClientType;
 }
 
 type SocketIdentity =
@@ -114,12 +122,18 @@ export class RelayHub {
 
   claimPairingCode(code: string, viewer: PairingViewer): PairingClaim | null {
     const device = this.devicesByCode.get(code);
-    if (!device || device.socket.readyState !== WebSocket.OPEN || !device.pairingAvailable) {
+    if (
+      !device ||
+      device.socket.readyState !== WebSocket.OPEN ||
+      !canClaimPairingSlot(device.claimedClientTypes, viewer.clientType)
+    ) {
       return null;
     }
 
-    device.pairingAvailable = false;
-    this.devicesByCode.delete(code);
+    device.claimedClientTypes.add(viewer.clientType);
+    if (!hasOpenPairingSlot(device.claimedClientTypes)) {
+      this.devicesByCode.delete(code);
+    }
     this.send(device.socket, {
       type: "pairing.claimed",
       viewerDeviceId: viewer.viewerDeviceId,
@@ -199,12 +213,15 @@ export class RelayHub {
       deviceName: parsed.data.deviceName,
       pairingCode: parsed.data.pairingCode,
       accessToken: parsed.data.accessToken,
-      pairingAvailable: parsed.data.pairingAvailable,
+      claimedClientTypes: normalizeClaimedClientTypes(
+        parsed.data.pairedClientTypes,
+        parsed.data.pairingAvailable
+      ),
       storageSharingEnabled: parsed.data.storageSharingEnabled
     };
     this.identities.set(socket, { role: "device", accessToken: device.accessToken });
     this.devicesByToken.set(device.accessToken, device);
-    if (device.pairingAvailable) {
+    if (hasOpenPairingSlot(device.claimedClientTypes)) {
       this.devicesByCode.set(device.pairingCode, device);
     }
     this.send(socket, { type: "device.registered" });
