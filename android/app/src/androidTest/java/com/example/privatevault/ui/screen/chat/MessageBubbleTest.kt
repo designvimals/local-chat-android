@@ -67,17 +67,16 @@ class MessageBubbleTest {
 
     @androidx.compose.runtime.Composable
     private fun BubbleForTest(
+        message: Message = Message("one", "phone", "peer", "hello", "2026-07-14T10:00:00Z", "sent"),
         selected: Boolean = false,
         selectionCount: Int = 0,
         showMenu: Boolean = false,
-        message: Message = Message("one", "phone", "peer", "hello", "2026-07-14T10:00:00Z", "sent"),
         onSelect: () -> Unit
     ) {
         MessageBubble(
             message = message,
             isMine = true,
             showSenderName = false,
-            showAvatar = false,
             groupedWithPrevious = false,
             groupedWithNext = false,
             reactedByMe = emptySet(),

@@ -18,6 +18,10 @@ class ChatRepository(
     val messages: StateFlow<List<Message>> = messageStore.messages
     private val _viewerConnected = MutableStateFlow(false)
     val viewerConnected: StateFlow<Boolean> = _viewerConnected
+    private val _peerPresence = MutableStateFlow(
+        PeerPresence(lastSeenAtMillis = tokenStore.getPeerLastSeenAtMillis())
+    )
+    val peerPresence: StateFlow<PeerPresence> = _peerPresence
     private val _remoteTyping = MutableStateFlow(false)
     val remoteTyping: StateFlow<Boolean> = _remoteTyping
     private val _localTyping = MutableStateFlow(false)
@@ -90,7 +94,14 @@ class ChatRepository(
 
     fun isMine(message: Message): Boolean = message.senderDeviceId == tokenStore.getDeviceId()
 
-    fun setPeerConnected(connected: Boolean) {
+    @Synchronized
+    fun setPeerConnected(connected: Boolean, observedAtMillis: Long = System.currentTimeMillis()) {
+        val currentPresence = _peerPresence.value
+        val nextPresence = reducePeerPresence(currentPresence, connected, observedAtMillis)
+        _peerPresence.value = nextPresence
+        if (nextPresence.lastSeenAtMillis != currentPresence.lastSeenAtMillis) {
+            tokenStore.setPeerLastSeenAtMillis(requireNotNull(nextPresence.lastSeenAtMillis))
+        }
         _viewerConnected.value = connected || tokenStore.isPairingClaimed()
         if (!connected) _remoteTyping.value = false
     }

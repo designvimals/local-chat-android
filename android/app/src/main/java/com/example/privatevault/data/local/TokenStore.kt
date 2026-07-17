@@ -65,11 +65,26 @@ class TokenStore(context: Context) {
     }
 
     fun savePeerConnection(connection: PeerConnection) {
+        val previousViewerDeviceId = preferences.getString(KEY_PEER_VIEWER_DEVICE_ID, null)
         preferences.edit()
             .putString(KEY_PEER_ACCESS_TOKEN, connection.accessToken)
             .putString(KEY_PEER_VIEWER_DEVICE_ID, connection.viewerDeviceId)
             .putString(KEY_PEER_FRIEND_NAME, connection.friendName)
+            .also { editor ->
+                if (previousViewerDeviceId != null && previousViewerDeviceId != connection.viewerDeviceId) {
+                    editor.remove(KEY_PEER_LAST_SEEN_AT)
+                }
+            }
             .apply()
+    }
+
+    fun getPeerLastSeenAtMillis(): Long? = preferences
+        .getLong(KEY_PEER_LAST_SEEN_AT, 0L)
+        .takeIf { it > 0L }
+
+    fun setPeerLastSeenAtMillis(timestampMillis: Long) {
+        require(timestampMillis > 0L) { "Last-seen timestamps must be positive." }
+        preferences.edit().putLong(KEY_PEER_LAST_SEEN_AT, timestampMillis).apply()
     }
 
     fun clearPeerConnection() {
@@ -77,6 +92,7 @@ class TokenStore(context: Context) {
             .remove(KEY_PEER_ACCESS_TOKEN)
             .remove(KEY_PEER_VIEWER_DEVICE_ID)
             .remove(KEY_PEER_FRIEND_NAME)
+            .remove(KEY_PEER_LAST_SEEN_AT)
             .apply()
     }
 
@@ -92,6 +108,7 @@ class TokenStore(context: Context) {
         const val KEY_PEER_ACCESS_TOKEN = "peer_access_token"
         const val KEY_PEER_VIEWER_DEVICE_ID = "peer_viewer_device_id"
         const val KEY_PEER_FRIEND_NAME = "peer_friend_name"
+        const val KEY_PEER_LAST_SEEN_AT = "peer_last_seen_at"
         val random = SecureRandom()
     }
 }

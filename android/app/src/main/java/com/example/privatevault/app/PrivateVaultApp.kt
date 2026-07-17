@@ -6,6 +6,7 @@ import android.net.Uri
 import android.widget.Toast
 import android.os.Build
 import android.os.Environment
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
@@ -95,6 +96,10 @@ fun PrivateVaultApp(
     val update by availableUpdate.collectAsState()
     val appReady = onboardingComplete == true || BuildConfig.LOCAL_ONLY
     val chatSelected = appReady && destination == MainDestination.Chat
+
+    BackHandler(enabled = appReady && destination != MainDestination.Chat) {
+        destination = MainDestination.Chat
+    }
 
     DisposableEffect(chatSelected) {
         onChatVisibilityChanged(chatSelected)
