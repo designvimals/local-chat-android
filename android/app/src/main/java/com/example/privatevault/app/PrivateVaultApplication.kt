@@ -12,6 +12,9 @@ class PrivateVaultApplication : Application() {
     lateinit var runtime: AppRuntime
         private set
 
+    var resetInProgress: Boolean = false
+        private set
+
     private val screenOffReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == Intent.ACTION_SCREEN_OFF) {
@@ -22,6 +25,9 @@ class PrivateVaultApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        resetInProgress = OneTimeFullReset.requestIfNeeded(this)
+        if (resetInProgress) return
+
         runtime = AppRuntime(applicationContext)
         ContextCompat.registerReceiver(
             this,

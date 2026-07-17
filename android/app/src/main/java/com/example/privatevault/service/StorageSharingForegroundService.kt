@@ -39,14 +39,22 @@ class StorageSharingForegroundService : Service() {
     private var relayJob: Job? = null
     private var peerRelayJob: Job? = null
     private var messageNotificationJob: Job? = null
+    private var resetInProgress = false
 
     override fun onCreate() {
         super.onCreate()
-        runtime = (application as PrivateVaultApplication).runtime
+        val application = application as PrivateVaultApplication
+        if (application.resetInProgress) {
+            resetInProgress = true
+            stopSelf()
+            return
+        }
+        runtime = application.runtime
         ensureChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (resetInProgress) return START_NOT_STICKY
         val requestedMode = when {
             intent?.action == StorageNotificationActions.ACTION_PAUSE -> SharingMode.Paused
             intent?.hasExtra(StorageNotificationActions.EXTRA_STORAGE_ENABLED) == true -> {
@@ -84,11 +92,13 @@ class StorageSharingForegroundService : Service() {
         relayJob?.cancel()
         peerRelayJob?.cancel()
         messageNotificationJob?.cancel()
-        runBlocking(Dispatchers.IO) {
-            runCatching { runtime.backendClient.restartConnection() }
-            runCatching { runtime.peerRelayClient.restartConnection() }
+        if (::runtime.isInitialized) {
+            runBlocking(Dispatchers.IO) {
+                runCatching { runtime.backendClient.restartConnection() }
+                runCatching { runtime.peerRelayClient.restartConnection() }
+            }
+            runtime.localServerManager.stop()
         }
-        runtime.localServerManager.stop()
         serviceScope.cancel()
         super.onDestroy()
     }

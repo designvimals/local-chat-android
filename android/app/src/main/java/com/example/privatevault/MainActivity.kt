@@ -54,9 +54,16 @@ class MainActivity : ComponentActivity() {
     private val availableUpdate = MutableStateFlow<AppUpdate?>(null)
     private var dismissedUpdateVersion: String? = null
     private var jankStats: JankStats? = null
+    private var resetInProgress = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val application = application as PrivateVaultApplication
+        if (application.resetInProgress) {
+            resetInProgress = true
+            finishAndRemoveTask()
+            return
+        }
         enableEdgeToEdge()
         if (BuildConfig.DEBUG) {
             jankStats = JankStats.createAndTrack(window) { frameData ->
@@ -66,7 +73,7 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        val runtime = (application as PrivateVaultApplication).runtime
+        val runtime = application.runtime
         appLockManager = runtime.appLockManager
         settingsStore = runtime.settingsStore
         tokenStore = runtime.tokenStore
@@ -112,6 +119,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        if (resetInProgress) return
         (application as PrivateVaultApplication).runtime.chatVisibilityTracker.setActivityForeground(true)
         appLockManager.onAppForegrounded()
         lifecycleScope.launch {
@@ -140,6 +148,10 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
+        if (resetInProgress) {
+            super.onStop()
+            return
+        }
         (application as PrivateVaultApplication).runtime.chatVisibilityTracker.setActivityForeground(false)
         appLockManager.onAppBackgrounded()
         super.onStop()
