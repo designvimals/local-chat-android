@@ -144,6 +144,26 @@ class MessageRulesTest {
         assertTrue(deleted.canonicalAttachments.isEmpty())
     }
 
+    @Test
+    fun syncRevisionChangesForContentReceiptsAndLocalDeletion() {
+        val original = message("one", "phone", "hello")
+        val revision = MessageSyncRevision.of(original)
+        assertEquals("7bbbed98b8f37154", revision)
+
+        assertFalse(revision == MessageSyncRevision.of(original.copy(
+            text = "changed",
+            updatedAt = "2026-07-14T10:01:00Z"
+        )))
+        assertFalse(revision == MessageSyncRevision.of(original.copy(
+            status = "read",
+            readAt = "2026-07-14T10:01:00Z"
+        )))
+        assertFalse(revision == MessageSyncRevision.of(original.copy(
+            deletedForDeviceIds = setOf("phone")
+        )))
+        assertEquals(revision, MessageSyncRevision.of(original.copy()))
+    }
+
     private fun message(id: String, sender: String, text: String) = Message(
         id = id,
         senderDeviceId = sender,

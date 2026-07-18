@@ -1,0 +1,41 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "between-private-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-18",
+  "vars": {
+    "PUBLIC_RELAY_URL": "https://between-private-relay.design-vimals.workers.dev",
+    "APP_CONFIG_REVISION": "1",
+    "APP_LATEST_VERSION": "",
+    "APP_MINIMUM_VERSION": "",
+    "APP_UPDATE_URL": "",
+    "APP_FILE_SHARING_ENABLED": "true",
+    "APP_MESSAGE_SEARCH_ENABLED": "true",
+    "APP_CONNECTION_RETRY_MILLIS": "2000",
+    "APP_SYNC_RECOVERY_MILLIS": "60000",
+    "APP_SEND_BOUNCE_SCALE": "0.7",
+    "APP_EXPRESSIVE_EFFECTS_ENABLED": "true"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "RELAY_HUB",
+        "class_name": "RelayHub"
+      }
+    ]
+  },
+  "exports": {
+    "RelayHub": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  },
+  "assets": {
+    "directory": "../web/dist",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "observability": {
+    "enabled": true
+  }
+}

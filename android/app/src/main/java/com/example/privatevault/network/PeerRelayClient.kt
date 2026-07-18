@@ -5,6 +5,7 @@ import com.example.privatevault.attachment.AttachmentManager
 import com.example.privatevault.app.ChatVisibilityTracker
 import com.example.privatevault.BuildConfig
 import com.example.privatevault.data.local.PeerConnection
+import com.example.privatevault.data.local.MessageSyncRevision
 import com.example.privatevault.data.local.TokenStore
 import com.example.privatevault.data.repository.ChatRepository
 import com.example.privatevault.data.repository.DeviceRepository
@@ -34,17 +35,18 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -70,7 +72,8 @@ class PeerRelayClient(
     private val chatRepository: ChatRepository,
     private val attachmentManager: AttachmentManager,
     private val chatVisibilityTracker: ChatVisibilityTracker,
-    private val baseUrl: String = BuildConfig.BACKEND_URL
+    private val baseUrlProvider: () -> String = { BuildConfig.BACKEND_URL },
+    private val syncRecoveryMillisProvider: () -> Long = { DEFAULT_SYNC_RECOVERY_MILLIS }
 ) {
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
     private val client = HttpClient(CIO) {
@@ -95,6 +98,7 @@ class PeerRelayClient(
 
     suspend fun claimPairingCode(code: String): Result<PeerConnection> = withContext(Dispatchers.IO) {
         runCatching {
+            val baseUrl = baseUrl()
             require(code.matches(Regex("\\d{6}"))) { "Enter a six-digit code." }
             require(code != tokenStore.getPairingCode()) { "Enter the code from the other phone." }
             val response = client.post("${baseUrl.trimEnd('/')}/auth/login") {
@@ -121,24 +125,43 @@ class PeerRelayClient(
     }
 
     suspend fun connectPeer(connection: PeerConnection) {
+        val connectionBaseUrl = baseUrl()
         _state.value = PeerConnectionState.Connecting
         try {
-            client.webSocket(urlString = relayUrl()) {
+            client.webSocket(urlString = relayUrl(connectionBaseUrl)) {
                 activeSession = this
                 sendJson(buildJsonObject {
                     put("type", "register.viewer")
                     put("accessToken", connection.accessToken)
                 })
                 coroutineScope {
-                    val receiver = launch { receiveLoop(connection.friendName) }
+                    val syncSignals = Channel<Unit>(Channel.CONFLATED)
+                    val receiver = launch {
+                        receiveLoop(connection.friendName) { syncSignals.trySend(Unit) }
+                    }
                     val synchronizer = launch {
                         while (isActive) {
+                            withTimeoutOrNull(syncRecoveryMillisProvider().coerceIn(15_000L, 900_000L)) {
+                                syncSignals.receive()
+                            }
                             if (peerOnline) runCatching { syncOnce(this@webSocket, connection) }
-                            delay(2_500)
+                        }
+                    }
+                    val typingNotifier = launch {
+                        chatRepository.localTyping.drop(1).collect { typing ->
+                            if (peerOnline) {
+                                runCatching {
+                                    request(this@webSocket, "chat.typing", buildJsonObject {
+                                        put("typing", typing)
+                                    })
+                                }
+                            }
                         }
                     }
                     receiver.join()
                     synchronizer.cancel()
+                    typingNotifier.cancel()
+                    syncSignals.close()
                 }
             }
         } catch (cancelled: CancellationException) {
@@ -167,7 +190,10 @@ class PeerRelayClient(
         chatRepository.setPeerConnected(false)
     }
 
-    private suspend fun DefaultClientWebSocketSession.receiveLoop(friendName: String) {
+    private suspend fun DefaultClientWebSocketSession.receiveLoop(
+        friendName: String,
+        onSyncNeeded: () -> Unit
+    ) {
         for (frame in incoming) {
             if (frame !is Frame.Text) continue
             val message = runCatching { json.parseToJsonElement(frame.readText()).jsonObject }.getOrNull() ?: continue
@@ -177,13 +203,16 @@ class PeerRelayClient(
                     if (peerOnline) {
                         _state.value = PeerConnectionState.Connected(friendName)
                         chatRepository.setPeerConnected(true)
+                        onSyncNeeded()
                     }
                 }
                 "device.status" -> {
                     peerOnline = message["online"]?.jsonPrimitive?.contentOrNull == "true"
                     _state.value = if (peerOnline) PeerConnectionState.Connected(friendName) else PeerConnectionState.Connecting
                     chatRepository.setPeerConnected(peerOnline)
+                    if (peerOnline) onSyncNeeded()
                 }
+                "chat.changed" -> onSyncNeeded()
                 "response" -> {
                     val requestId = message["requestId"]?.jsonPrimitive?.contentOrNull ?: continue
                     val download = downloads.remove(requestId)
@@ -221,14 +250,28 @@ class PeerRelayClient(
 
     private suspend fun syncOnce(session: DefaultClientWebSocketSession, connection: PeerConnection) {
         syncMutex.withLock {
+            val sentRevisions = chatRepository.messages.value.associate { message ->
+                message.id to MessageSyncRevision.of(message)
+            }
             val firstSync = request(session, "chat.sync", buildJsonObject {
                 put("readerDeviceId", deviceRepository.deviceId)
+                put("knownMessageRevisions", buildJsonObject {
+                    sentRevisions.forEach { (messageId, revision) -> put(messageId, revision) }
+                })
             })
             downloadMissingAttachments(session, mergeResponseMessages(firstSync))
-
-            request(session, "chat.typing", buildJsonObject {
-                put("typing", chatRepository.isLocalTyping())
-            })
+            if (firstSync.containsKey("missingMessageIds")) {
+                val missingMessageIds = firstSync["missingMessageIds"]
+                    ?.jsonArray
+                    ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+                    ?.toSet()
+                    .orEmpty()
+                chatRepository.messages.value.forEach { message ->
+                    if (message.id !in missingMessageIds) {
+                        syncedMutationFingerprints[message.id] = mutationFingerprint(message)
+                    }
+                }
+            }
 
             for (message in chatRepository.messages.value) {
                 val fingerprint = mutationFingerprint(message)
@@ -265,9 +308,6 @@ class PeerRelayClient(
                     put("readAt", TimeUtils.nowIso())
                 })
             }
-            downloadMissingAttachments(session, mergeResponseMessages(request(session, "chat.sync", buildJsonObject {
-                put("readerDeviceId", deviceRepository.deviceId)
-            })))
         }
     }
 
@@ -359,7 +399,9 @@ class PeerRelayClient(
         return response["payload"]?.jsonObject ?: buildJsonObject { }
     }
 
-    private fun relayUrl(): String = when {
+    private fun baseUrl(): String = baseUrlProvider().trimEnd('/')
+
+    private fun relayUrl(baseUrl: String): String = when {
         baseUrl.startsWith("https://") -> "wss://${baseUrl.removePrefix("https://").trimEnd('/')}/relay"
         baseUrl.startsWith("http://") -> "ws://${baseUrl.removePrefix("http://").trimEnd('/')}/relay"
         else -> baseUrl.trimEnd('/') + "/relay"
@@ -377,4 +419,8 @@ class PeerRelayClient(
         val attachment: ChatAttachment,
         val completion: CompletableDeferred<Unit>
     )
+
+    private companion object {
+        const val DEFAULT_SYNC_RECOVERY_MILLIS = 60_000L
+    }
 }

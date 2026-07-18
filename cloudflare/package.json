@@ -1,0 +1,19 @@
+{
+  "name": "between-cloudflare-relay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "check": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs",
+    "smoke": "node tests/live-smoke.mjs",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260718.1",
+    "typescript": "^5.9.3",
+    "wrangler": "4.112.0"
+  }
+}

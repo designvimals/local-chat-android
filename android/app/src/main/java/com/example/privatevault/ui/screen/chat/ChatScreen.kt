@@ -190,6 +190,9 @@ fun ChatScreen(
     onRemovePendingAttachment: (String) -> Unit,
     onSendAttachments: suspend (List<ChatAttachment>, String, String?) -> Result<Message>,
     attachmentManager: AttachmentManager,
+    sentMessageBounceScale: Float = 0.7f,
+    expressiveEffectsEnabled: Boolean = true,
+    messageSearchEnabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val messages by viewModel.messages.collectAsStateWithLifecycle()
@@ -278,7 +281,10 @@ fun ChatScreen(
                             animatedVisibilityScope = this@AnimatedContent
                         )
                     },
-                    attachmentManager = attachmentManager
+                    attachmentManager = attachmentManager,
+                    sentMessageBounceScale = sentMessageBounceScale,
+                    expressiveEffectsEnabled = expressiveEffectsEnabled,
+                    messageSearchEnabled = messageSearchEnabled
                 )
             } else {
                 FullScreenImageViewer(
@@ -330,7 +336,10 @@ private fun ConversationScaffold(
     reactedByMe: (Message) -> Set<String>,
     onImageClick: (Message, ChatAttachment) -> Unit,
     imageModifier: @Composable (ChatAttachment) -> Modifier,
-    attachmentManager: AttachmentManager
+    attachmentManager: AttachmentManager,
+    sentMessageBounceScale: Float,
+    expressiveEffectsEnabled: Boolean,
+    messageSearchEnabled: Boolean
 ) {
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
@@ -514,6 +523,7 @@ private fun ConversationScaffold(
                 searchQuery = searchQuery,
                 searchResultIndex = searchResultIndex,
                 searchResultCount = searchResultIds.size,
+                messageSearchEnabled = messageSearchEnabled,
                 onOpenSearch = {
                     clearSelection()
                     searchActive = true
@@ -578,7 +588,8 @@ private fun ConversationScaffold(
                 ) { item ->
                     SentMessageEntrance(
                         messageId = item.message.id,
-                        animate = animationsEnabled && item.message.id == enteringMessageId
+                        animate = animationsEnabled && item.message.id == enteringMessageId,
+                        bounceScale = sentMessageBounceScale
                     ) {
                         val selected = item.message.id in selectedIds
                         val itemCanEdit = remember(
@@ -642,7 +653,7 @@ private fun ConversationScaffold(
                             attachmentManager = attachmentManager,
                             playExpressiveOnAppear = animationsEnabled &&
                                 item.message.id == enteringMessageId,
-                            expressiveMotionEnabled = animationsEnabled
+                            expressiveMotionEnabled = animationsEnabled && expressiveEffectsEnabled
                         )
                     }
                 }
@@ -725,6 +736,7 @@ private fun ExpressiveConversationHeader(
     searchQuery: String,
     searchResultIndex: Int,
     searchResultCount: Int,
+    messageSearchEnabled: Boolean,
     onOpenSearch: () -> Unit,
     onSearchQueryChange: (String) -> Unit,
     onPreviousSearchResult: () -> Unit,
@@ -856,8 +868,10 @@ private fun ExpressiveConversationHeader(
                             )
                         }
                     }
-                    IconButton(onClick = onOpenSearch, modifier = Modifier.size(48.dp)) {
-                        Icon(Icons.Default.Search, stringResource(R.string.search_messages), Modifier.size(25.dp))
+                    if (messageSearchEnabled) {
+                        IconButton(onClick = onOpenSearch, modifier = Modifier.size(48.dp)) {
+                            Icon(Icons.Default.Search, stringResource(R.string.search_messages), Modifier.size(25.dp))
+                        }
                     }
                     IconButton(onClick = onOpenSettings, modifier = Modifier.size(48.dp)) {
                         Icon(Icons.Default.Settings, stringResource(R.string.settings), Modifier.size(26.dp))
@@ -872,13 +886,17 @@ private fun ExpressiveConversationHeader(
 private fun SentMessageEntrance(
     messageId: String,
     animate: Boolean,
+    bounceScale: Float,
     content: @Composable () -> Unit
 ) {
     if (!animate) {
         content()
         return
     }
-    val initialOffsetPx = with(LocalDensity.current) { 16.dp.roundToPx() }
+    val clampedBounce = bounceScale.coerceIn(0f, 1f)
+    val dampingRatio = 1f - (0.4f * clampedBounce)
+    val initialScale = 1f - (0.057f * clampedBounce)
+    val initialOffsetPx = with(LocalDensity.current) { (16.dp * clampedBounce).roundToPx() }
     val visibility = remember(messageId) {
         MutableTransitionState(!animate).apply { targetState = true }
     }
@@ -886,15 +904,15 @@ private fun SentMessageEntrance(
         visibleState = visibility,
         enter = slideInVertically(
             animationSpec = spring(
-                dampingRatio = 0.72f,
+                dampingRatio = dampingRatio,
                 stiffness = Spring.StiffnessMedium
             ),
             initialOffsetY = { it.coerceAtMost(initialOffsetPx) }
         ) + scaleIn(
-            initialScale = 0.96f,
+            initialScale = initialScale,
             transformOrigin = TransformOrigin(0.5f, 1f),
             animationSpec = spring(
-                dampingRatio = 0.72f,
+                dampingRatio = dampingRatio,
                 stiffness = Spring.StiffnessMedium
             )
         ) + fadeIn(tween(120))
@@ -1252,8 +1270,11 @@ private fun PairingCard(
                         )
                     }
                 }
-                is BackendRegistrationState.Failed -> {
-                    Text(registrationState.message, color = MaterialTheme.colorScheme.error)
+                BackendRegistrationState.Failed -> {
+                    Text(
+                        stringResource(R.string.connection_service_unavailable),
+                        color = MaterialTheme.colorScheme.error
+                    )
                     Button(onClick = onRetryRegistration) { Text(stringResource(R.string.retry_relay_connection)) }
                 }
                 else -> Row(verticalAlignment = Alignment.CenterVertically) {

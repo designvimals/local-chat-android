@@ -27,9 +27,11 @@ import com.example.privatevault.data.local.TokenStore
 import com.example.privatevault.data.repository.ChatRepository
 import com.example.privatevault.data.repository.StorageRepository
 import com.example.privatevault.network.BackendClient
+import com.example.privatevault.network.AppConfigRepository
 import com.example.privatevault.network.PeerRelayClient
 import com.example.privatevault.network.AppUpdate
 import com.example.privatevault.network.GithubUpdateChecker
+import com.example.privatevault.network.availableUpdate
 import com.example.privatevault.model.ChatAttachment
 import com.example.privatevault.server.LocalServerManager
 import com.example.privatevault.service.StorageSessionNotifier
@@ -50,6 +52,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var settingsStore: SettingsStore
     private lateinit var tokenStore: TokenStore
     private lateinit var backendClient: BackendClient
+    private lateinit var appConfigRepository: AppConfigRepository
     private lateinit var peerRelayClient: PeerRelayClient
     private lateinit var attachmentManager: AttachmentManager
     private lateinit var chatRepository: ChatRepository
@@ -84,6 +87,7 @@ class MainActivity : ComponentActivity() {
         storageRepository = runtime.storageRepository
         localServerManager = runtime.localServerManager
         backendClient = runtime.backendClient
+        appConfigRepository = runtime.appConfigRepository
         peerRelayClient = runtime.peerRelayClient
 
         setContent {
@@ -98,6 +102,7 @@ class MainActivity : ComponentActivity() {
                         storageRepository = storageRepository,
                         pairingViewModelFactory = { PairingViewModel(tokenStore, peerRelayClient, ::restartPeerRelay) },
                         registrationState = backendClient.registrationState,
+                        remoteAppConfig = appConfigRepository.config,
                         onStorageSharingChanged = ::applySharingState,
                         onPairingCodeRotated = ::restartRelay,
                         onRetryRegistration = ::restartRelay,
@@ -138,7 +143,14 @@ class MainActivity : ComponentActivity() {
             }
         }
         if (!BuildConfig.LOCAL_ONLY) lifecycleScope.launch {
-            val update = GithubUpdateChecker.findAvailableUpdate()
+            val previousRelayUrl = appConfigRepository.current.relayBaseUrl
+            val refreshedConfig = appConfigRepository.refresh()
+            if (refreshedConfig.relayBaseUrl != previousRelayUrl) {
+                backendClient.restartConnection()
+                peerRelayClient.restartConnection()
+            }
+            val update = refreshedConfig.availableUpdate(BuildConfig.VERSION_NAME)
+                ?: GithubUpdateChecker.findAvailableUpdate()
             availableUpdate.value = update?.takeUnless { it.version == dismissedUpdateVersion }
         }
     }
@@ -174,7 +186,9 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             notifier.markInactive()
             val storageAvailable = withContext(Dispatchers.IO) {
-                enabled && hasStorageAccess(this@MainActivity)
+                enabled &&
+                    appConfigRepository.current.features.fileSharing &&
+                    hasStorageAccess(this@MainActivity)
             }
             withContext(Dispatchers.IO) {
                 if (storageAvailable) {
@@ -211,9 +225,10 @@ class MainActivity : ComponentActivity() {
                 delay(VISIBLE_CONNECTION_START_DELAY_MS)
                 while (isActive) {
                     val storageAvailable = settingsStore.storageSharingEnabled.first() &&
-                        settingsStore.storagePermissionGranted.first()
+                        settingsStore.storagePermissionGranted.first() &&
+                        appConfigRepository.current.features.fileSharing
                     backendClient.connectRelay(storageSharingEnabled = storageAvailable)
-                    delay(CONNECTION_RETRY_DELAY_MS)
+                    delay(appConfigRepository.current.timing.connectionRetryMillis)
                 }
             }
         }
@@ -223,11 +238,11 @@ class MainActivity : ComponentActivity() {
                 while (isActive) {
                     val connection = tokenStore.getPeerConnection()
                     if (connection == null) {
-                        delay(CONNECTION_RETRY_DELAY_MS)
+                        delay(appConfigRepository.current.timing.connectionRetryMillis)
                         continue
                     }
                     peerRelayClient.connectPeer(connection)
-                    delay(CONNECTION_RETRY_DELAY_MS)
+                    delay(appConfigRepository.current.timing.connectionRetryMillis)
                 }
             }
         }
@@ -262,7 +277,6 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val JANK_LOG_TAG = "ChatFrameTiming"
-        private const val CONNECTION_RETRY_DELAY_MS = 2_000L
         private const val VISIBLE_CONNECTION_START_DELAY_MS = 200L
 
         fun hasStorageAccess(context: Context): Boolean {

@@ -36,8 +36,8 @@ android {
         applicationId = "com.example.privatevault"
         minSdk = 26
         targetSdk = 37
-        versionCode = 17
-        versionName = "0.4.4"
+        versionCode = 18
+        versionName = "0.4.5"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         val releaseRequested = gradle.startParameter.taskNames.any { task ->
@@ -55,9 +55,12 @@ android {
         }
 
         val backendUrl = configuredBackendUrl ?: "http://10.0.2.2:8787"
+        val appConfigUrl = providers.gradleProperty("pocAppConfigUrl").orNull
+            ?: "${backendUrl.trimEnd('/')}/app-config"
         val registrationKey = configuredRegistrationKey ?: "local-dev-registration-key-change-me"
 
         buildConfigField("String", "BACKEND_URL", "\"$backendUrl\"")
+        buildConfigField("String", "APP_CONFIG_URL", "\"$appConfigUrl\"")
         buildConfigField("String", "REGISTRATION_KEY", "\"$registrationKey\"")
         buildConfigField("boolean", "LOCAL_ONLY", "false")
     }

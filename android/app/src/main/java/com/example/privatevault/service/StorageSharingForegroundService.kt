@@ -68,6 +68,12 @@ class StorageSharingForegroundService : Service() {
         promoteToForeground()
 
         serviceScope.launch {
+            val previousRelayUrl = runtime.appConfigRepository.current.relayBaseUrl
+            val refreshedConfig = runtime.appConfigRepository.refresh()
+            if (refreshedConfig.relayBaseUrl != previousRelayUrl) {
+                runtime.backendClient.restartConnection()
+                runtime.peerRelayClient.restartConnection()
+            }
             runtime.localServerManager.start(runtime.tokenStore.getAccessToken())
             runtime.backendClient.updateStorageSharing(true)
             ensureConnectionLoops()
@@ -108,9 +114,10 @@ class StorageSharingForegroundService : Service() {
             relayJob = serviceScope.launch {
                 while (isActive) {
                     val storageAvailable = runtime.settingsStore.storageSharingEnabled.first() &&
-                        runtime.settingsStore.storagePermissionGranted.first()
+                        runtime.settingsStore.storagePermissionGranted.first() &&
+                        runtime.appConfigRepository.current.features.fileSharing
                     runtime.backendClient.connectRelay(storageSharingEnabled = storageAvailable)
-                    delay(2_000)
+                    delay(runtime.appConfigRepository.current.timing.connectionRetryMillis)
                 }
             }
         }
@@ -119,11 +126,11 @@ class StorageSharingForegroundService : Service() {
                 while (isActive) {
                     val connection = runtime.tokenStore.getPeerConnection()
                     if (connection == null) {
-                        delay(2_000)
+                        delay(runtime.appConfigRepository.current.timing.connectionRetryMillis)
                         continue
                     }
                     runtime.peerRelayClient.connectPeer(connection)
-                    delay(2_000)
+                    delay(runtime.appConfigRepository.current.timing.connectionRetryMillis)
                 }
             }
         }

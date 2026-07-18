@@ -1,7 +1,7 @@
 import { HardDrive, LogOut, MessageCircle, RefreshCw, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { clearSession } from "../lib/auth";
-import { loadLocalMessages, mergeMessages, saveLocalMessages } from "../lib/chatStore";
+import { loadLocalMessages, mergeMessages, messageSyncRevision, saveLocalMessages } from "../lib/chatStore";
 import { navigate } from "../lib/navigation";
 import { RelayClient } from "../lib/relay";
 import type { AuthSession, Message } from "../types/api";
@@ -44,7 +44,10 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
     syncingRef.current = true;
     try {
       let remote = await relay.request<{ messages: Message[]; typing?: boolean }>("chat.sync", {
-        readerDeviceId: session.viewerDeviceId
+        readerDeviceId: session.viewerDeviceId,
+        knownMessageRevisions: Object.fromEntries(
+          messagesRef.current.map((message) => [message.id, messageSyncRevision(message)])
+        )
       });
       setRemoteTyping(remote.typing === true);
       let merged = mergeMessages(messagesRef.current, remote.messages);
@@ -72,11 +75,6 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
           readAt: new Date().toISOString()
         });
       }
-      remote = await relay.request<{ messages: Message[]; typing?: boolean }>("chat.sync", {
-        readerDeviceId: session.viewerDeviceId
-      });
-      setRemoteTyping(remote.typing === true);
-      commitMessages(mergeMessages(messagesRef.current, remote.messages));
       setError(null);
       setLastSeen(new Date().toISOString());
     } catch (caught) {
@@ -105,7 +103,8 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
 
   useEffect(() => {
     if (online) void sync();
-    const timer = window.setInterval(() => void sync(), 4000);
+    const unsubscribeChanges = relay.subscribeChanges(() => void sync());
+    const timer = window.setInterval(() => void sync(), 60_000);
     const onVisible = () => {
       if (document.visibilityState === "visible") void sync();
     };
@@ -113,10 +112,11 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
     window.addEventListener("online", onVisible);
     return () => {
       window.clearInterval(timer);
+      unsubscribeChanges();
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("online", onVisible);
     };
-  }, [online, sync]);
+  }, [online, relay, sync]);
 
   const statusText = useMemo(() => {
     if (online) return storageEnabled ? "Online · Files available" : "Online · Files paused";

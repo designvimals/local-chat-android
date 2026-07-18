@@ -29,6 +29,30 @@ export function saveLocalMessages(session: AuthSession, messages: Message[]): vo
   window.localStorage.setItem(storageKey(session), JSON.stringify(messages.map(normalizeMessage).sort(compareMessages)));
 }
 
+export function messageSyncRevision(message: Message): string {
+  const normalized = normalizeMessage(message);
+  const canonical = [
+    normalized.updatedAt ?? normalized.timestamp,
+    normalized.status,
+    normalized.deliveredAt ?? "",
+    normalized.readAt ?? "",
+    normalized.deletedAt ?? "",
+    [...(normalized.deletedForDeviceIds ?? [])].sort().join(","),
+    normalized.text,
+    normalized.emphasisLevel ?? 0,
+    normalized.replyToMessageId ?? "",
+    normalized.editedAt ?? "",
+    canonicalAttachments(normalized)
+      .map((attachment) => `${attachment.id}:${attachment.name}:${attachment.mimeType}:${attachment.size}:${attachment.width ?? ""}x${attachment.height ?? ""};`)
+      .join(""),
+    [...(normalized.reactions ?? [])]
+      .sort((left, right) => left.emoji < right.emoji ? -1 : left.emoji > right.emoji ? 1 : 0)
+      .map((reaction) => `${reaction.emoji}:${[...reaction.reactorDeviceIds].sort().join(",")};`)
+      .join("")
+  ].join("|");
+  return fnv1a(canonical, 0x811c9dc5) + fnv1a(canonical, 0x9e3779b9);
+}
+
 export function mergeMessages(local: Message[], remote: Message[]): Message[] {
   const merged = new Map(local.map((message) => {
     const normalized = normalizeMessage(message);
@@ -128,4 +152,13 @@ function mutationKey(message: Message): string {
 
 function compareMessages(left: Message, right: Message): number {
   return left.timestamp.localeCompare(right.timestamp) || left.id.localeCompare(right.id);
+}
+
+function fnv1a(value: string, seed: number): string {
+  let hash = seed | 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }

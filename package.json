@@ -4,14 +4,16 @@
   "private": true,
   "workspaces": [
     "backend",
+    "cloudflare",
     "web",
     "shared/api-contracts"
   ],
   "scripts": {
     "dev:backend": "npm --workspace backend run dev",
     "dev:web": "npm --workspace web run dev",
-    "build": "npm --workspace shared/api-contracts run build && npm --workspace backend run build && npm --workspace web run build",
-    "check": "npm --workspace shared/api-contracts run check && npm --workspace backend run check && npm --workspace web run check",
-    "test": "npm --workspace web run test"
+    "build": "npm --workspace shared/api-contracts run build && npm --workspace backend run build && npm --workspace web run build && npm --workspace cloudflare run build",
+    "check": "npm --workspace shared/api-contracts run check && npm --workspace backend run check && npm --workspace web run check && npm --workspace cloudflare run check",
+    "test": "npm --workspace web run test && npm --workspace cloudflare run test",
+    "deploy:cloudflare": "npm --workspace web run build && npm --workspace cloudflare run deploy"
   }
 }

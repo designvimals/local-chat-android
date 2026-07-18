@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { canonicalAttachments, mergeMessages, normalizeMessage } from "../src/lib/chatStore.ts";
+import { canonicalAttachments, mergeMessages, messageSyncRevision, normalizeMessage } from "../src/lib/chatStore.ts";
 import { singleEmojiOrNull } from "../src/lib/messagePresentation.ts";
 
 function message(overrides = {}) {
@@ -80,4 +80,14 @@ test("a tombstone clears legacy and multi-attachment content", () => {
 
   assert.equal(normalized.attachment, undefined);
   assert.deepEqual(normalized.attachments, []);
+});
+
+test("sync revisions change for content, receipts, and local deletions", () => {
+  const original = message();
+  const revision = messageSyncRevision(original);
+  assert.equal(revision, "7bbbed98b8f37154");
+  assert.notEqual(messageSyncRevision(message({ text: "changed", updatedAt: "2026-07-14T10:01:00Z" })), revision);
+  assert.notEqual(messageSyncRevision(message({ status: "read", readAt: "2026-07-14T10:01:00Z" })), revision);
+  assert.notEqual(messageSyncRevision(message({ deletedForDeviceIds: ["phone"] })), revision);
+  assert.equal(messageSyncRevision({ ...original }), revision);
 });

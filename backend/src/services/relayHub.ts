@@ -156,6 +156,8 @@ export class RelayHub {
     } else {
       if (parsed.type === "device.update") {
         this.updateDevice(identity.accessToken, parsed);
+      } else if (parsed.type === "device.chat.changed") {
+        this.broadcastChatChanged(identity.accessToken);
       } else {
         this.forwardDeviceReply(identity.accessToken, parsed);
       }
@@ -307,6 +309,12 @@ export class RelayHub {
   private broadcastStatus(accessToken: string, online: boolean, storageSharingEnabled: boolean): void {
     for (const viewer of this.viewersByToken.get(accessToken) ?? []) {
       this.send(viewer, { type: "device.status", online, storageSharingEnabled });
+    }
+  }
+
+  private broadcastChatChanged(accessToken: string): void {
+    for (const viewer of this.viewersByToken.get(accessToken) ?? []) {
+      this.send(viewer, { type: "chat.changed" });
     }
   }
 

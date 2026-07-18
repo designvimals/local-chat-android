@@ -4,7 +4,8 @@ Between is a two-device sideload app. Android owns the authoritative chat transc
 
 ## Privacy model
 
-The relay keeps only live WebSocket connections, temporary request routing, and unclaimed pairing codes in memory. It does not persist:
+The relay keeps only live WebSocket connections, temporary request routing, unclaimed pairing codes,
+and short-lived failed-login counters. It does not persist:
 
 - messages or an offline message queue
 - file listings, file chunks, or downloads
@@ -41,18 +42,52 @@ For emulator development, open the `android` directory in Android Studio and sel
 package, label, and bug icon, so Shift+F10 builds, installs, and opens the testing app without
 replacing the production app.
 
-## Required public setup
+## Cloudflare public setup
 
-Different-location use requires a stable public host that supports long-lived WebSockets. Deploy the repository's `Dockerfile` and configure:
+Production uses a Cloudflare Worker with a SQLite-backed Durable Object for WebSocket coordination.
+The Hibernation API lets idle connections sleep without disconnecting, and the same Worker serves the
+built web portal. Deploy it once with:
 
-```text
-DEVICE_REGISTRATION_KEY=<the generated private key>
-PORT=8787
+```powershell
+npx wrangler login
+npm run deploy:cloudflare
+Get-Content -Raw output\config\device-registration-key.txt |
+  npx wrangler secret put DEVICE_REGISTRATION_KEY --config cloudflare\wrangler.jsonc
 ```
 
-The host must terminate HTTPS and forward WebSocket upgrades on `/relay`. The same process serves the built web portal and `/auth/login`, so the public base URL is also the site URL.
+The deployed production URL is:
 
-`render.yaml` is included for a single-instance Singapore Render deployment. Its free plan can sleep after 15 minutes without inbound HTTP or WebSocket traffic and may take about a minute to wake; the clients reconnect automatically.
+```text
+https://between-private-relay.design-vimals.workers.dev
+```
+
+Cloudflare coordinates live connections only. Messages and attachment bytes are forwarded directly
+between connected clients and are not written to Durable Object storage. `backend/`, `Dockerfile`, and
+`render.yaml` remain available as a local or container-hosted fallback.
+
+### Remote Android configuration
+
+The Worker publishes a declarative configuration document at `/app-config`. Android validates it,
+caches only the last valid response, and falls back to compiled defaults when the document or network
+is unavailable. The document cannot load or execute app code.
+
+The currently connected controls are:
+
+- public relay base URL, including automatic reconnection after a change
+- connection retry and transcript recovery intervals
+- file-sharing and message-search kill switches
+- sent-message bounce intensity and expressive-message effects
+- optional latest/minimum version and HTTPS APK download metadata
+
+Edit `PUBLIC_RELAY_URL` or the `APP_*` variables in `cloudflare/wrangler.jsonc`, increment
+`APP_CONFIG_REVISION`, run the
+Cloudflare tests, and deploy the Worker. Existing Android installations that include this configuration
+client pick up the validated values when the app next comes to the foreground; no new APK is needed.
+Keep `APP_LATEST_VERSION` and `APP_UPDATE_URL` empty until that release and APK actually exist.
+
+The default bootstrap address is the production relay URL plus `/app-config`. A release can override
+it with `-PpocAppConfigUrl=https://stable-bootstrap.example/app-config`. Native Kotlin/Compose code,
+Android permissions, resources, database migrations, and dependencies still require a signed APK.
 
 Generate/read the matching key once:
 
@@ -60,7 +95,8 @@ Generate/read the matching key once:
 .\scripts\initialize-public-relay.ps1
 ```
 
-Set that exact value as `DEVICE_REGISTRATION_KEY` on the public host. Do not share it; possession of it permits a client to register as a phone.
+Set that exact value as the Worker's `DEVICE_REGISTRATION_KEY` secret. Do not share it; possession of
+it permits a client to register as a phone.
 
 After deployment, build the APK with the public URL:
 
@@ -79,8 +115,7 @@ The PC launcher is not required after the relay/site is deployed and the APK is 
 2. The chat home screen shows a six-digit one-time code after the phone reaches the relay.
 3. Open `https://your-relay.example` from any location and enter that code.
 4. Chat and Files work whenever both devices overlap online. After the Android app has started its
-   foreground connection, closing its screen or swiping it from Recents keeps transfers available;
-   use the notification's **Pause files** action to stop remote file access.
+   visible connection, leaving the app disconnects it; reopen the app when chat or file access is needed.
 
 Bulk downloads are checkpointed in the paired browser after every completed file. ZIP downloads are
 checkpointed after every completed ZIP part. If a connection drops or the browser is reopened, the
@@ -120,12 +155,18 @@ Hidden folders, `Android/data`, `Android/obb`, app-private storage, system files
 
 This intentionally uses the PC LAN address and is only for testing on one network. It is not the remote workflow.
 
+Chat synchronization is change-triggered. A connected device announces transcript mutations and peers
+request only messages whose compact revision changed. A 60-second recovery sync handles a missed event;
+the previous twice-per-2.5-second full-transcript polling is no longer used.
+
 ## Verification
 
 ```powershell
 npm run check
 npm run build
-docker build -t between-relay .
+npm test
+$env:DEVICE_REGISTRATION_KEY=(Get-Content -Raw output\config\device-registration-key.txt).Trim()
+npm --workspace cloudflare run smoke -- https://between-private-relay.design-vimals.workers.dev
 
 cd android
 .\gradlew.bat :app:assembleDebug --no-daemon `
@@ -138,6 +179,7 @@ cd android
 ```text
 android/   Kotlin + Compose app, local messages.txt, outbound relay client
 backend/   In-memory WebSocket relay, pairing endpoint, built-site host
+cloudflare/ Production Worker, Durable Object relay, deployment config, live smoke test
 web/       React chat-first portal, local transcript and offline queue
 shared/    TypeScript API contracts
 ```

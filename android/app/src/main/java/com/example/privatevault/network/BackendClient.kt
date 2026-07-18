@@ -1,6 +1,7 @@
 package com.example.privatevault.network
 
 import android.util.Base64
+import android.util.Log
 import com.example.privatevault.attachment.AttachmentManager
 import com.example.privatevault.BuildConfig
 import com.example.privatevault.data.local.SettingsStore
@@ -24,6 +25,9 @@ import io.ktor.websocket.send
 import java.io.File
 import java.io.InputStream
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
@@ -43,7 +47,7 @@ sealed interface BackendRegistrationState {
     data object Idle : BackendRegistrationState
     data object Connecting : BackendRegistrationState
     data class Registered(val endpointUrl: String) : BackendRegistrationState
-    data class Failed(val message: String) : BackendRegistrationState
+    data object Failed : BackendRegistrationState
 }
 
 /** Maintains the phone's outbound-only connection to the public relay. */
@@ -54,7 +58,7 @@ class BackendClient(
     private val pathResolver: PathResolver,
     private val settingsStore: SettingsStore,
     private val attachmentManager: AttachmentManager,
-    private val baseUrl: String = BuildConfig.BACKEND_URL
+    private val baseUrlProvider: () -> String = { BuildConfig.BACKEND_URL }
 ) {
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
     private val client = HttpClient(CIO) {
@@ -70,27 +74,39 @@ class BackendClient(
     private var activeSession: DefaultClientWebSocketSession? = null
 
     suspend fun connectRelay(storageSharingEnabled: Boolean) {
+        val connectionBaseUrl = baseUrl()
         _registrationState.value = BackendRegistrationState.Connecting
         try {
-            client.webSocket(urlString = relayUrl()) {
+            client.webSocket(urlString = relayUrl(connectionBaseUrl)) {
                 activeSession = this
                 sendJson(deviceRegistration(storageSharingEnabled))
-                for (frame in incoming) {
-                    if (frame is Frame.Text) {
-                        handleRelayMessage(this, frame.readText())
+                coroutineScope {
+                    val changeNotifier = launch {
+                        chatRepository.messages.drop(1).collect {
+                            sendJson(buildJsonObject { put("type", "device.chat.changed") })
+                        }
+                    }
+                    try {
+                        for (frame in incoming) {
+                            if (frame is Frame.Text) {
+                                handleRelayMessage(this@webSocket, frame.readText(), connectionBaseUrl)
+                            }
+                        }
+                    } finally {
+                        changeNotifier.cancel()
                     }
                 }
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (_: Throwable) {
-            _registrationState.value = BackendRegistrationState.Failed(
-                "Cannot reach the connection service at $baseUrl. It must be deployed on a public HTTPS address."
-            )
+        } catch (error: Throwable) {
+            Log.w(LOG_TAG, "Cannot reach connection service at $connectionBaseUrl", error)
+            _registrationState.value = BackendRegistrationState.Failed
         } finally {
             activeSession = null
             if (_registrationState.value is BackendRegistrationState.Registered) {
-                _registrationState.value = BackendRegistrationState.Failed("Connection lost. Reconnecting…")
+                Log.i(LOG_TAG, "Connection lost; reconnecting")
+                _registrationState.value = BackendRegistrationState.Failed
             }
         }
     }
@@ -108,21 +124,35 @@ class BackendClient(
         activeSession?.close(CloseReason(CloseReason.Codes.NORMAL, "Reconnect requested"))
     }
 
-    private suspend fun handleRelayMessage(session: DefaultClientWebSocketSession, raw: String) {
+    private suspend fun handleRelayMessage(
+        session: DefaultClientWebSocketSession,
+        raw: String,
+        connectionBaseUrl: String
+    ) {
         val message = runCatching { json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return
         when (message.string("type")) {
             "device.registered" -> {
-                _registrationState.value = BackendRegistrationState.Registered(baseUrl)
+                _registrationState.value = BackendRegistrationState.Registered(connectionBaseUrl)
             }
             "pairing.claimed" -> {
                 tokenStore.markPairingClaimed()
                 chatRepository.markViewerConnectedFromRelay()
             }
             "chat.sync" -> respond(session, message) {
-                val readerDeviceId = message.payload()["readerDeviceId"]?.jsonPrimitive?.contentOrNull
+                val payload = message.payload()
+                val readerDeviceId = payload["readerDeviceId"]?.jsonPrimitive?.contentOrNull
                     ?: com.example.privatevault.data.local.MessageStore.VIEWER_DEVICE_ID
+                val knownMessageRevisions = payload["knownMessageRevisions"]
+                    ?.jsonObject
+                    ?.mapValues { (_, revision) -> revision.jsonPrimitive.contentOrNull.orEmpty() }
+                    .orEmpty()
+                val changedMessages = chatRepository.messagesForViewer(readerDeviceId, knownMessageRevisions)
+                val currentMessageIds = chatRepository.messages.value.mapTo(mutableSetOf(), Message::id)
                 buildJsonObject {
-                    put("messages", json.encodeToJsonElement(chatRepository.messagesForViewer(readerDeviceId)))
+                    put("messages", json.encodeToJsonElement(changedMessages))
+                    put("missingMessageIds", json.encodeToJsonElement(
+                        knownMessageRevisions.keys.filterNot(currentMessageIds::contains)
+                    ))
                     put("typing", chatRepository.isLocalTyping())
                 }
             }
@@ -303,7 +333,9 @@ class BackendClient(
         }
     }
 
-    private fun relayUrl(): String {
+    private fun baseUrl(): String = baseUrlProvider().trimEnd('/')
+
+    private fun relayUrl(baseUrl: String): String {
         return when {
             baseUrl.startsWith("https://") -> "wss://${baseUrl.removePrefix("https://").trimEnd('/')}/relay"
             baseUrl.startsWith("http://") -> "ws://${baseUrl.removePrefix("http://").trimEnd('/')}/relay"
@@ -319,5 +351,9 @@ class BackendClient(
 
     private fun JsonObject.string(name: String): String {
         return get(name)?.jsonPrimitive?.contentOrNull ?: error("Missing $name")
+    }
+
+    private companion object {
+        const val LOG_TAG = "BackendClient"
     }
 }

@@ -101,7 +101,7 @@ fun PairingScreen(
                     }
                     if (pairingAvailable && registrationState is BackendRegistrationState.Failed) {
                         Text(
-                            registrationState.message,
+                            stringResource(R.string.connection_service_unavailable),
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodyMedium
                         )

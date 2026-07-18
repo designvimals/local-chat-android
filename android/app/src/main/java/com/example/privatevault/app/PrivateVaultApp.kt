@@ -40,6 +40,7 @@ import com.example.privatevault.data.repository.ChatRepository
 import com.example.privatevault.data.repository.StorageRepository
 import com.example.privatevault.network.BackendRegistrationState
 import com.example.privatevault.network.AppUpdate
+import com.example.privatevault.network.RemoteAppConfig
 import com.example.privatevault.model.ChatAttachment
 import com.example.privatevault.ui.screen.chat.ChatScreen
 import com.example.privatevault.ui.screen.chat.ChatViewModel
@@ -61,6 +62,7 @@ fun PrivateVaultApp(
     storageRepository: StorageRepository,
     pairingViewModelFactory: () -> PairingViewModel,
     registrationState: StateFlow<BackendRegistrationState>,
+    remoteAppConfig: StateFlow<RemoteAppConfig>,
     onStorageSharingChanged: (Boolean) -> Unit,
     onPairingCodeRotated: () -> Unit,
     onRetryRegistration: () -> Unit,
@@ -93,6 +95,7 @@ fun PrivateVaultApp(
     val pairingCode by pairingViewModel.pairingCode.collectAsState()
     val pairingAvailable by pairingViewModel.pairingAvailable.collectAsState()
     val backendRegistration by registrationState.collectAsState()
+    val operationalConfig by remoteAppConfig.collectAsState()
     val update by availableUpdate.collectAsState()
     val appReady = onboardingComplete == true || BuildConfig.LOCAL_ONLY
     val chatSelected = appReady && destination == MainDestination.Chat
@@ -193,6 +196,9 @@ fun PrivateVaultApp(
                     }
                 },
                 attachmentManager = attachmentManager,
+                sentMessageBounceScale = operationalConfig.motion.sentMessageBounceScale,
+                expressiveEffectsEnabled = operationalConfig.motion.expressiveEffectsEnabled,
+                messageSearchEnabled = operationalConfig.features.messageSearch,
                 modifier = modifier
             )
             MainDestination.Storage -> StorageBrowserScreen(

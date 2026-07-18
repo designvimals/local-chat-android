@@ -9,6 +9,7 @@ import com.example.privatevault.data.repository.ChatRepository
 import com.example.privatevault.data.repository.DeviceRepository
 import com.example.privatevault.data.repository.StorageRepository
 import com.example.privatevault.network.BackendClient
+import com.example.privatevault.network.AppConfigRepository
 import com.example.privatevault.network.PeerRelayClient
 import com.example.privatevault.server.LocalServerManager
 import com.example.privatevault.server.PathResolver
@@ -22,6 +23,7 @@ class AppRuntime(context: Context) {
     val appLockManager = AppLockManager(context)
     val settingsStore = SettingsStore(context)
     val tokenStore = TokenStore(context)
+    val appConfigRepository = AppConfigRepository(context)
     val attachmentManager = AttachmentManager(context)
     val deviceRepository = DeviceRepository(tokenStore)
     val pathResolver = PathResolver()
@@ -39,13 +41,16 @@ class AppRuntime(context: Context) {
         chatRepository = chatRepository,
         pathResolver = pathResolver,
         settingsStore = settingsStore,
-        attachmentManager = attachmentManager
+        attachmentManager = attachmentManager,
+        baseUrlProvider = { appConfigRepository.current.relayBaseUrl }
     )
     val peerRelayClient = PeerRelayClient(
         tokenStore = tokenStore,
         deviceRepository = deviceRepository,
         chatRepository = chatRepository,
         attachmentManager = attachmentManager,
-        chatVisibilityTracker = chatVisibilityTracker
+        chatVisibilityTracker = chatVisibilityTracker,
+        baseUrlProvider = { appConfigRepository.current.relayBaseUrl },
+        syncRecoveryMillisProvider = { appConfigRepository.current.timing.syncRecoveryMillis }
     )
 }

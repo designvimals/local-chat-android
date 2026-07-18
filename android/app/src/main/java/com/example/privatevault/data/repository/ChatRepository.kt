@@ -1,6 +1,7 @@
 package com.example.privatevault.data.repository
 
 import com.example.privatevault.data.local.MessageStore
+import com.example.privatevault.data.local.MessageSyncRevision
 import com.example.privatevault.data.local.TokenStore
 import com.example.privatevault.model.ChatAttachment
 import com.example.privatevault.model.DeleteScope
@@ -25,6 +26,7 @@ class ChatRepository(
     private val _remoteTyping = MutableStateFlow(false)
     val remoteTyping: StateFlow<Boolean> = _remoteTyping
     private val _localTyping = MutableStateFlow(false)
+    val localTyping: StateFlow<Boolean> = _localTyping
 
     suspend fun sendMessage(
         text: String,
@@ -78,10 +80,15 @@ class ChatRepository(
         return messageStore.receiveMessage(incoming.copy(text = incoming.text.trim()))
     }
 
-    suspend fun messagesForViewer(readerDeviceId: String = MessageStore.VIEWER_DEVICE_ID): List<Message> {
+    suspend fun messagesForViewer(
+        readerDeviceId: String = MessageStore.VIEWER_DEVICE_ID,
+        knownMessageRevisions: Map<String, String> = emptyMap()
+    ): List<Message> {
         markViewerConnected()
         messageStore.markDeliveredTo(readerDeviceId)
-        return messageStore.messages.value
+        return messageStore.messages.value.filter { message ->
+            knownMessageRevisions[message.id] != MessageSyncRevision.of(message)
+        }
     }
 
     suspend fun mergeFromPeer(messages: List<Message>) {

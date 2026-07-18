@@ -22,6 +22,7 @@ interface PendingDownload {
 }
 
 type StatusListener = (status: RelayStatus) => void;
+type ChangeListener = () => void;
 
 export class RelayClient {
   private socket: WebSocket | null = null;
@@ -34,6 +35,7 @@ export class RelayClient {
     storageSharingEnabled: false
   };
   private readonly listeners = new Set<StatusListener>();
+  private readonly changeListeners = new Set<ChangeListener>();
   private readonly pending = new Map<string, PendingRequest>();
   private readonly downloads = new Map<string, PendingDownload>();
 
@@ -66,6 +68,11 @@ export class RelayClient {
     this.listeners.add(listener);
     listener(this.status);
     return () => this.listeners.delete(listener);
+  }
+
+  subscribeChanges(listener: ChangeListener): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
   }
 
   isDeviceOnline(): boolean {
@@ -148,6 +155,10 @@ export class RelayClient {
         deviceOnline: message.online === true,
         storageSharingEnabled: message.storageSharingEnabled === true
       });
+      return;
+    }
+    if (type === "chat.changed") {
+      for (const listener of this.changeListeners) listener();
       return;
     }
 
