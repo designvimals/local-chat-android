@@ -28,7 +28,7 @@
     <string name="receipt_sent">✓</string>
     <string name="receipt_waiting">Waiting</string>
     <string name="update_available">Update available</string>
-    <string name="update_ready_body">Between %1$s is ready. Download the APK from GitHub and install it over this app. Your local messages will stay on this phone.</string>
+    <string name="update_ready_body">Test App %1$s is ready. Download the APK from GitHub and install it over this app. Your local messages will stay on this phone.</string>
     <string name="download">Download</string>
     <string name="later">Later</string>
     <string name="paired_device">Paired device</string>
