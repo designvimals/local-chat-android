@@ -51,7 +51,7 @@
     <string name="notification_available_title">Chat is online</string>
     <string name="notification_available_body">Only your paired device can connect.</string>
     <string name="notification_paused_title">Private chat is online</string>
-    <string name="notification_paused_body">File access is paused. Open the app to resume it.</string>
+    <string name="notification_paused_body">Chat is paused. Open the app to resume it.</string>
     <string name="notification_pause_action">Pause</string>
     <string name="storage_title">\"-\"</string>
     <string name="storage_unavailable">File sharing is unavailable. Open the paired app to resume file sharing. or File access is currently unavailable. Open the paired app to resume sharing.</string>

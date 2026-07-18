@@ -47,37 +47,32 @@ class StorageSharingForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val requestedMode = when {
-            intent?.action == StorageNotificationActions.ACTION_PAUSE -> SharingMode.Paused
-            intent?.hasExtra(StorageNotificationActions.EXTRA_STORAGE_ENABLED) == true -> {
-                if (intent.getBooleanExtra(StorageNotificationActions.EXTRA_STORAGE_ENABLED, false)) {
-                    SharingMode.Available
-                } else {
-                    SharingMode.Paused
-                }
+        if (intent?.action == StorageNotificationActions.ACTION_PAUSE) {
+            serviceScope.launch {
+                runtime.settingsStore.setStorageSharingEnabled(false)
+                runtime.backendClient.updateStorageSharing(false)
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf(startId)
             }
-            else -> SharingMode.Paused
+            return START_NOT_STICKY
         }
-        promoteToForeground(requestedMode)
+
+        val storageAvailable = intent?.getBooleanExtra(
+            StorageNotificationActions.EXTRA_STORAGE_ENABLED,
+            false
+        ) == true
+        if (!storageAvailable) {
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
+        promoteToForeground()
 
         serviceScope.launch {
-            if (intent?.action == StorageNotificationActions.ACTION_PAUSE) {
-                runtime.settingsStore.setStorageSharingEnabled(false)
-            }
-            val storageAvailable = when {
-                intent?.action == StorageNotificationActions.ACTION_PAUSE -> false
-                intent?.hasExtra(StorageNotificationActions.EXTRA_STORAGE_ENABLED) == true -> {
-                    intent.getBooleanExtra(StorageNotificationActions.EXTRA_STORAGE_ENABLED, false)
-                }
-                else -> runtime.settingsStore.storageSharingEnabled.first() &&
-                    runtime.settingsStore.storagePermissionGranted.first()
-            }
             runtime.localServerManager.start(runtime.tokenStore.getAccessToken())
-            runtime.backendClient.updateStorageSharing(storageAvailable)
-            updateNotification(if (storageAvailable) SharingMode.Available else SharingMode.Paused)
+            runtime.backendClient.updateStorageSharing(true)
             ensureConnectionLoops()
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     override fun onDestroy() {
@@ -136,21 +131,17 @@ class StorageSharingForegroundService : Service() {
 
     // The debug/sandbox manifest intentionally removes this production-only service.
     @SuppressLint("ForegroundServiceType")
-    private fun promoteToForeground(mode: SharingMode) {
+    private fun promoteToForeground() {
         ServiceCompat.startForeground(
             this,
             StorageNotificationActions.NOTIFICATION_ID,
-            buildNotification(mode),
+            buildNotification(),
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
             } else {
                 0
             }
         )
-    }
-
-    private fun updateNotification(mode: SharingMode) {
-        promoteToForeground(mode)
     }
 
     private fun ensureChannel() {
@@ -164,7 +155,7 @@ class StorageSharingForegroundService : Service() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
-    private fun buildNotification(mode: SharingMode): Notification {
+    private fun buildNotification(): Notification {
         val openIntent = PendingIntent.getActivity(
             this,
             0,
@@ -178,31 +169,25 @@ class StorageSharingForegroundService : Service() {
                 .setAction(StorageNotificationActions.ACTION_PAUSE),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val (title, body) = when (mode) {
-            SharingMode.Available -> getString(R.string.notification_available_title) to getString(R.string.notification_available_body)
-            SharingMode.Paused -> getString(R.string.notification_paused_title) to getString(R.string.notification_paused_body)
-        }
         return NotificationCompat.Builder(this, StorageNotificationActions.CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_folder_24)
-            .setContentTitle(title)
-            .setContentText(body)
+            .setContentTitle(getString(R.string.notification_available_title))
+            .setContentText(getString(R.string.notification_available_body))
             .setContentIntent(openIntent)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .apply {
-                if (mode == SharingMode.Available) {
-                    addAction(R.drawable.ic_pause_24, getString(R.string.notification_pause_action), pauseIntent)
-                }
-            }
+            .addAction(R.drawable.ic_pause_24, getString(R.string.notification_pause_action), pauseIntent)
             .build()
     }
-
-    private enum class SharingMode { Available, Paused }
 }
 
 class StorageSessionNotifier(private val context: Context) {
     fun markAvailable(storageSharingEnabled: Boolean) {
+        if (!storageSharingEnabled) {
+            markInactive()
+            return
+        }
         start(
             Intent(context, StorageSharingForegroundService::class.java)
                 .setAction(StorageNotificationActions.ACTION_AVAILABLE)
