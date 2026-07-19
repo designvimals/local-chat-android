@@ -78,10 +78,41 @@ test("progress updates do not rewrite the saved file manifest", async () => {
   const store = memoryQueueStore();
   const options = { store, legacyStorage: null };
   await saveDownloadBatch("viewer-one", batch(), options);
-  await saveDownloadProgress("viewer-one", "batch-one", 1, options);
+  await saveDownloadProgress("viewer-one", "batch-one", { nextIndex: 1 }, options);
 
   assert.equal(store.manifestWrites, 1);
   assert.equal((await loadDownloadBatch("viewer-one", options))?.nextIndex, 1);
+});
+
+test("zip progress preserves staged-file and completed-part checkpoints", async () => {
+  const store = memoryQueueStore();
+  const options = { store, legacyStorage: null };
+  await saveDownloadBatch("viewer-one", batch({ mode: "zip", nextPart: 0 }), options);
+  await saveDownloadProgress(
+    "viewer-one",
+    "batch-one",
+    { nextIndex: 2, nextPart: 0 },
+    options
+  );
+
+  const restored = await loadDownloadBatch("viewer-one", options);
+
+  assert.equal(restored?.nextIndex, 2);
+  assert.equal(restored?.nextPart, 0);
+  assert.equal(restored?.files[0].archivePath, "one.txt");
+});
+
+test("a fully staged zip queue remains available until its archive is saved", async () => {
+  const store = memoryQueueStore();
+  const options = { store, legacyStorage: null };
+  await saveDownloadBatch(
+    "viewer-one",
+    batch({ mode: "zip", nextIndex: 2, nextPart: 0 }),
+    options
+  );
+
+  assert.equal((await loadDownloadBatch("viewer-one", options))?.nextIndex, 2);
+  assert.equal(store.manifests.has("viewer-one"), true);
 });
 
 test("a saved queue remains isolated to its paired browser", async () => {

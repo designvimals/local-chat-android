@@ -1,4 +1,5 @@
 import type { FileItem } from "../types/api";
+import type { ArchiveFileItem } from "./archivePlan";
 
 export type DownloadBatchMode = "individual" | "zip";
 
@@ -7,8 +8,9 @@ export interface DownloadBatch {
   id: string;
   mode: DownloadBatchMode;
   folderPath: string;
-  files: FileItem[];
+  files: ArchiveFileItem[];
   nextIndex: number;
+  nextPart?: number;
   createdAt: string;
 }
 
@@ -17,13 +19,19 @@ interface DownloadBatchManifest {
   id: string;
   mode: DownloadBatchMode;
   folderPath: string;
-  files: FileItem[];
+  files: ArchiveFileItem[];
   createdAt: string;
 }
 
 interface DownloadBatchProgress {
   batchId: string;
   nextIndex: number;
+  nextPart?: number;
+}
+
+export interface DownloadProgressCheckpoint {
+  nextIndex: number;
+  nextPart?: number;
 }
 
 export interface DownloadQueueStore {
@@ -55,15 +63,16 @@ let defaultStore: DownloadQueueStore | null = null;
 export function createDownloadBatch(
   mode: DownloadBatchMode,
   folderPath: string,
-  files: FileItem[]
+  files: Array<FileItem | ArchiveFileItem>
 ): DownloadBatch {
   return {
     version: 1,
     id: crypto.randomUUID(),
     mode,
     folderPath,
-    files: files.map((file) => ({ ...file })),
+    files: files.map(normalizeArchiveFile),
     nextIndex: 0,
+    nextPart: mode === "zip" ? 0 : undefined,
     createdAt: new Date().toISOString()
   };
 }
@@ -79,7 +88,7 @@ export async function loadDownloadBatch(
     const record = await store.loadBatch(ownerId);
     if (record) {
       const batch = combineBatch(record.manifest, record.progress);
-      if (batch && batch.nextIndex < batch.files.length) return batch;
+      if (batch && (batch.mode === "zip" || batch.nextIndex < batch.files.length)) return batch;
       await store.clear(ownerId);
     }
   } catch {
@@ -88,7 +97,7 @@ export async function loadDownloadBatch(
 
   const legacyBatch = loadLegacyBatch(ownerId, legacyStorage);
   if (!legacyBatch) return null;
-  if (legacyBatch.nextIndex >= legacyBatch.files.length) {
+  if (legacyBatch.mode === "individual" && legacyBatch.nextIndex >= legacyBatch.files.length) {
     legacyStorage?.removeItem(legacyStorageKey(ownerId));
     return null;
   }
@@ -120,17 +129,17 @@ export async function saveDownloadBatch(
 export async function saveDownloadProgress(
   ownerId: string,
   batchId: string,
-  nextIndex: number,
+  checkpoint: DownloadProgressCheckpoint,
   options: DownloadQueueOptions = {}
 ): Promise<void> {
   const store = options.store ?? getDefaultStore();
   try {
-    await store.saveProgress(ownerId, { batchId, nextIndex });
+    await store.saveProgress(ownerId, { batchId, ...checkpoint });
   } catch {
     const legacyStorage = options.legacyStorage === undefined ? getLegacyStorage() : options.legacyStorage;
     const legacyBatch = loadLegacyBatch(ownerId, legacyStorage);
     if (legacyBatch?.id === batchId) {
-      saveLegacyBatch(ownerId, { ...legacyBatch, nextIndex }, legacyStorage);
+      saveLegacyBatch(ownerId, { ...legacyBatch, ...checkpoint }, legacyStorage);
     }
   }
 }
@@ -243,18 +252,23 @@ function transactionCompleted(transaction: IDBTransaction): Promise<void> {
 }
 
 function manifestFromBatch(batch: DownloadBatch): DownloadBatchManifest {
-  const { nextIndex: _nextIndex, ...manifest } = batch;
+  const { nextIndex: _nextIndex, nextPart: _nextPart, ...manifest } = batch;
   return manifest;
 }
 
 function progressFromBatch(batch: DownloadBatch): DownloadBatchProgress {
-  return { batchId: batch.id, nextIndex: batch.nextIndex };
+  return { batchId: batch.id, nextIndex: batch.nextIndex, nextPart: batch.nextPart };
 }
 
 function combineBatch(manifestValue: unknown, progressValue: unknown): DownloadBatch | null {
   if (!isDownloadBatchManifest(manifestValue) || !isDownloadBatchProgress(progressValue)) return null;
   if (progressValue.batchId !== manifestValue.id || progressValue.nextIndex > manifestValue.files.length) return null;
-  return { ...manifestValue, nextIndex: progressValue.nextIndex };
+  return {
+    ...manifestValue,
+    files: manifestValue.files.map(normalizeArchiveFile),
+    nextIndex: progressValue.nextIndex,
+    nextPart: progressValue.nextPart
+  };
 }
 
 function getLegacyStorage(): LegacyDownloadQueueStorage | null {
@@ -277,7 +291,10 @@ function loadLegacyBatch(
     if (!raw) return null;
     const parsed = JSON.parse(raw) as unknown;
     if (!isDownloadBatch(parsed)) throw new Error("Invalid legacy download batch.");
-    return parsed;
+    return {
+      ...parsed,
+      files: parsed.files.map(normalizeArchiveFile)
+    };
   } catch {
     try {
       storage.removeItem(key);
@@ -326,7 +343,10 @@ function isDownloadBatchProgress(value: unknown): value is DownloadBatchProgress
   return typeof value.batchId === "string" &&
     typeof value.nextIndex === "number" &&
     Number.isInteger(value.nextIndex) &&
-    value.nextIndex >= 0;
+    value.nextIndex >= 0 &&
+    (value.nextPart === undefined || (
+      typeof value.nextPart === "number" && Number.isInteger(value.nextPart) && value.nextPart >= 0
+    ));
 }
 
 function isFileItem(value: unknown): value is FileItem {
@@ -337,6 +357,14 @@ function isFileItem(value: unknown): value is FileItem {
     (typeof value.size === "number" || value.size === null) &&
     (typeof value.mimeType === "string" || value.mimeType === null) &&
     (typeof value.lastModified === "string" || value.lastModified === null);
+}
+
+function normalizeArchiveFile(file: FileItem | ArchiveFileItem): ArchiveFileItem {
+  if (file.type !== "file") throw new Error("Download batches can only contain files.");
+  const archivePath = "archivePath" in file && typeof file.archivePath === "string" && file.archivePath.trim()
+    ? file.archivePath
+    : file.name;
+  return { ...file, type: "file", archivePath };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
