@@ -110,6 +110,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.privatevault.R
 import com.example.privatevault.attachment.AttachmentManager
+import com.example.privatevault.data.local.MessageStore
 import com.example.privatevault.model.ChatAttachment
 import com.example.privatevault.model.Message
 import com.example.privatevault.model.MessageEmphasis
@@ -252,6 +253,9 @@ fun MessageBubble(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+        if (message.senderDeviceId == MessageStore.VIEWER_DEVICE_ID) {
+            PrivateMessageTag(Modifier.padding(start = 4.dp, bottom = 5.dp))
+        }
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = if (isMine) Arrangement.End else Arrangement.Start,
@@ -357,6 +361,23 @@ fun MessageBubble(
                     .offset(y = (-5).dp)
             )
         }
+    }
+}
+
+@Composable
+private fun PrivateMessageTag(modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+    ) {
+        Text(
+            text = "Private",
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Medium
+        )
     }
 }
 

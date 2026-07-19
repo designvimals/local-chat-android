@@ -65,9 +65,27 @@ class MessageBubbleTest {
         compose.onNodeWithText("Read", substring = true, useUnmergedTree = true).assertExists()
     }
 
+    @Test fun webMessageShowsOnlyThePrivateTag() {
+        val webMessage = Message(
+            id = "one",
+            senderDeviceId = "viewer-web",
+            receiverDeviceId = "phone",
+            text = "hello",
+            timestamp = "2026-07-14T10:00:00Z",
+            status = "delivered"
+        )
+
+        compose.setContent {
+            MaterialTheme { BubbleForTest(message = webMessage, isMine = false) {} }
+        }
+
+        compose.onNodeWithText("Private").assertExists()
+    }
+
     @androidx.compose.runtime.Composable
     private fun BubbleForTest(
         message: Message = Message("one", "phone", "peer", "hello", "2026-07-14T10:00:00Z", "sent"),
+        isMine: Boolean = true,
         selected: Boolean = false,
         selectionCount: Int = 0,
         showMenu: Boolean = false,
@@ -75,7 +93,7 @@ class MessageBubbleTest {
     ) {
         MessageBubble(
             message = message,
-            isMine = true,
+            isMine = isMine,
             showSenderName = false,
             groupedWithPrevious = false,
             groupedWithNext = false,
