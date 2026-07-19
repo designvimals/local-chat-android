@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { canonicalAttachments, mergeMessages, messageSyncRevision, normalizeMessage } from "../src/lib/chatStore.ts";
+import {
+  canonicalAttachments,
+  filterDeletedMessages,
+  mergeMessages,
+  messageSyncRevision,
+  normalizeMessage
+} from "../src/lib/chatStore.ts";
 import { singleEmojiOrNull } from "../src/lib/messagePresentation.ts";
 
 function message(overrides = {}) {
@@ -90,4 +96,24 @@ test("sync revisions change for content, receipts, and local deletions", () => {
   assert.notEqual(messageSyncRevision(message({ status: "read", readAt: "2026-07-14T10:01:00Z" })), revision);
   assert.notEqual(messageSyncRevision(message({ deletedForDeviceIds: ["phone"] })), revision);
   assert.equal(messageSyncRevision({ ...original }), revision);
+});
+
+test("deleted message ids remain filtered after a remote sync", () => {
+  const deletedIds = new Set(["2"]);
+  const merged = mergeMessages(
+    [message({ id: "1", timestamp: "2026-01-01T00:00:01.000Z" })],
+    [
+      message({ id: "2", timestamp: "2026-01-01T00:00:02.000Z" }),
+      message({ id: "3", timestamp: "2026-01-01T00:00:03.000Z" })
+    ]
+  );
+
+  assert.deepEqual(filterDeletedMessages(merged, deletedIds).map(({ id }) => id), ["1", "3"]);
+});
+
+test("removing a tombstone makes the cached message visible again for undo", () => {
+  const deletedIds = new Set(["2"]);
+  deletedIds.delete("2");
+
+  assert.deepEqual(filterDeletedMessages([message({ id: "2" })], deletedIds).map(({ id }) => id), ["2"]);
 });

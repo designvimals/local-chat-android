@@ -1,19 +1,35 @@
 import { zip, type AsyncZippable } from "fflate";
-import { ArrowDown, ArrowLeft, ArrowUp, ArrowUpDown, Download, FolderSearch, Home, ListChecks, ListFilter, RefreshCw, RotateCcw, Trash2, WifiOff, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Archive, ArrowDown, ArrowLeft, ArrowUp, ArrowUpDown, Download, FolderSearch, Home, ListChecks, ListFilter, RefreshCw, RotateCcw, Search, Trash2, WifiOff, X } from "lucide-react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   clearDownloadBatch,
   createDownloadBatch,
   loadDownloadBatch,
   saveDownloadBatch,
+  saveDownloadProgress,
   type DownloadBatch
 } from "../lib/downloadQueue";
 import {
+  archivePartBounds,
+  collectSelectedArchiveFiles,
+  inferCompletedArchiveParts,
+  splitArchiveParts
+} from "../lib/archivePlan";
+import {
+  clearStagedArchiveFiles,
+  deleteStagedArchiveFiles,
+  loadStagedArchiveFile,
+  requestPersistentArchiveStorage,
+  saveStagedArchiveFile
+} from "../lib/archiveStaging";
+import {
   collectDirectoryFileNames,
+  collectSelectedFileNames,
   filesMissingByName,
   type ReadableDirectoryEntry
 } from "../lib/directoryScan";
 import { categorizeFile, fileFilterOptions, fileMatchesFilter, type FileFilter } from "../lib/fileFilters";
+import { fileMatchesSearch } from "../lib/fileSearch";
 import {
   defaultSortDirection,
   fileSortOptions,
@@ -48,9 +64,63 @@ type DirectoryPickerWindow = Window & {
   }) => Promise<ReadableDirectoryEntry>;
 };
 
-const RECEIVER_BATCH_SIZE = 3;
-const ZIP_PART_SIZE = 5;
-const ZIP_PART_BYTES = 64 * 1024 * 1024;
+interface SelectedDirectoryFiles {
+  directoryName: string;
+  files: File[];
+}
+
+interface TransferMeter {
+  startedAt: number;
+  confirmedBytes: number;
+  lastUiUpdateAt: number;
+  samples: Array<{ time: number; bytes: number }>;
+}
+
+function selectDirectoryFiles(): Promise<SelectedDirectoryFiles> {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = true;
+    input.setAttribute("webkitdirectory", "");
+    input.setAttribute("directory", "");
+    input.style.display = "none";
+
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      input.remove();
+      callback();
+    };
+
+    input.addEventListener("change", () => {
+      const files = Array.from(input.files ?? []);
+      if (files.length === 0) {
+        finish(() => reject(new DOMException("Folder selection cancelled.", "AbortError")));
+        return;
+      }
+
+      const firstRelativePath = files[0]?.webkitRelativePath ?? "";
+      const directoryName = firstRelativePath.split("/")[0] || "selected folder";
+      finish(() => resolve({ directoryName, files }));
+    }, { once: true });
+
+    input.addEventListener("cancel", () => {
+      finish(() => reject(new DOMException("Folder selection cancelled.", "AbortError")));
+    }, { once: true });
+
+    document.body.append(input);
+    input.click();
+  });
+}
+
+const RECEIVER_BATCH_SIZE = 10;
+const INTER_FILE_PAUSE_MS = 40;
+const RECEIVER_BATCH_PAUSE_MS = 250;
+const TRANSFER_SAMPLE_WINDOW_MS = 4_000;
+const TRANSFER_UI_INTERVAL_MS = 500;
+const STORAGE_LIST_TIMEOUT_MS = 2 * 60_000;
+const transferNumberFormatter = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
 
 export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose }: StoragePanelProps) {
   const [path, setPath] = useState("/");
@@ -60,23 +130,32 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
   const [fileFilter, setFileFilter] = useState<FileFilter>("all");
   const [fileSort, setFileSort] = useState<FileSort>("name");
   const [sortDirection, setSortDirection] = useState<FileSortDirection>("ascending");
+  const [searchQuery, setSearchQuery] = useState("");
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(() => new Set());
   const [bulkProgress, setBulkProgress] = useState<BulkProgress | null>(null);
-  const [pendingBatch, setPendingBatch] = useState<DownloadBatch | null>(() => loadDownloadBatch(queueOwnerId));
+  const [pendingBatch, setPendingBatch] = useState<DownloadBatch | null>(null);
+  const [downloadQueueReady, setDownloadQueueReady] = useState(false);
+  const [transferSpeedBps, setTransferSpeedBps] = useState<number | null>(null);
   const [deviceOnline, setDeviceOnline] = useState(() => relay.isDeviceOnline());
   const [storageAvailable, setStorageAvailable] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const batchRunActiveRef = useRef(false);
+  const batchAbortControllerRef = useRef<AbortController | null>(null);
+  const autoResumeAttemptedRef = useRef(false);
+  const transferMeterRef = useRef<TransferMeter | null>(null);
+  const deferredSearchQuery = useDeferredValue(searchQuery);
 
   const breadcrumb = useMemo(() => path === "/"
     ? ["Shared folders"]
     : ["Shared folders", ...path.split("/").filter(Boolean)], [path]);
   const allFiles = useMemo(() => items.filter((item) => item.type === "file"), [items]);
   const filteredItems = useMemo(
-    () => items.filter((item) => fileMatchesFilter(item, fileFilter)),
-    [fileFilter, items]
+    () => items.filter((item) => fileMatchesFilter(item, fileFilter) && fileMatchesSearch(item, deferredSearchQuery)),
+    [deferredSearchQuery, fileFilter, items]
   );
+  const hasSearchQuery = deferredSearchQuery.trim().length > 0;
   const sortedItems = useMemo(
     () => sortFileItems(filteredItems, fileSort, sortDirection),
     [fileSort, filteredItems, sortDirection]
@@ -99,20 +178,34 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
     for (const file of allFiles) counts[categorizeFile(file)] += 1;
     return counts;
   }, [allFiles]);
-  const selectedFiles = useMemo(
-    () => files.filter((item) => selectedPaths.has(item.path)),
-    [files, selectedPaths]
+  const selectedItems = useMemo(
+    () => items.filter((item) => selectedPaths.has(item.path)),
+    [items, selectedPaths]
   );
+  const selectedFiles = useMemo(
+    () => selectedItems.filter((item) => item.type === "file"),
+    [selectedItems]
+  );
+  const selectedFolders = useMemo(
+    () => selectedItems.filter((item) => item.type === "folder"),
+    [selectedItems]
+  );
+  const pendingCanResume = pendingBatch !== null
+    && (storageAvailable || canPackStagedArchivePart(pendingBatch));
 
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const response = await relay.request<StorageListResponse>("storage.list", { path });
+      const response = await relay.request<StorageListResponse>(
+        "storage.list",
+        { path },
+        STORAGE_LIST_TIMEOUT_MS
+      );
       setItems(response.items);
       setSelectedPaths((current) => {
-        const visibleFiles = new Set(response.items.filter((item) => item.type === "file").map((item) => item.path));
-        return new Set([...current].filter((selectedPath) => visibleFiles.has(selectedPath)));
+        const availablePaths = new Set(response.items.map((item) => item.path));
+        return new Set([...current].filter((selectedPath) => availablePaths.has(selectedPath)));
       });
     } catch (caught) {
       setItems([]);
@@ -132,7 +225,25 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
   useEffect(() => {
     setSelectionMode(false);
     setSelectedPaths(new Set());
+    setSearchQuery("");
   }, [path]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setDownloadQueueReady(false);
+    setPendingBatch(null);
+    void loadDownloadBatch(queueOwnerId)
+      .catch(() => null)
+      .then(async (batch) => {
+        if (cancelled) return;
+        if (!batch) await clearStagedArchiveFiles(queueOwnerId).catch(() => undefined);
+        setPendingBatch(batch);
+        setDownloadQueueReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [queueOwnerId]);
 
   async function handleDownload(item: FileItem) {
     setDownloadingPath(item.path);
@@ -157,10 +268,10 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
     });
   }
 
-  function toggleAllFiles() {
-    setSelectedPaths((current) => current.size === files.length
+  function toggleAllItems() {
+    setSelectedPaths((current) => current.size === sortedItems.length
       ? new Set()
-      : new Set(files.map((file) => file.path)));
+      : new Set(sortedItems.map((item) => item.path)));
   }
 
   function leaveSelectionMode() {
@@ -168,15 +279,65 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
     setSelectedPaths(new Set());
   }
 
-  function checkpointBatch(batch: DownloadBatch, nextIndex: number): DownloadBatch {
-    const checkpoint = { ...batch, nextIndex };
-    saveDownloadBatch(queueOwnerId, checkpoint);
+  function startTransferMeter() {
+    const now = performance.now();
+    transferMeterRef.current = {
+      startedAt: now,
+      confirmedBytes: 0,
+      lastUiUpdateAt: now,
+      samples: [{ time: now, bytes: 0 }]
+    };
+    setTransferSpeedBps(null);
+  }
+
+  function reportTransferBytes(totalBytes: number, force = false) {
+    const meter = transferMeterRef.current;
+    if (!meter) return;
+    const now = performance.now();
+    const lastSample = meter.samples.at(-1);
+    if (!lastSample || force || now - lastSample.time >= 100) {
+      meter.samples.push({ time: now, bytes: totalBytes });
+    } else {
+      lastSample.bytes = totalBytes;
+    }
+    meter.samples = meter.samples.filter((sample) => now - sample.time <= TRANSFER_SAMPLE_WINDOW_MS);
+    if (!force && now - meter.lastUiUpdateAt < TRANSFER_UI_INTERVAL_MS) return;
+
+    const firstSample = meter.samples[0];
+    const elapsedMs = Math.max(now - firstSample.time, 1);
+    const transferredBytes = Math.max(totalBytes - firstSample.bytes, 0);
+    meter.lastUiUpdateAt = now;
+    if (elapsedMs >= 250 && transferredBytes > 0) {
+      setTransferSpeedBps(transferredBytes * 1_000 / elapsedMs);
+    }
+  }
+
+  async function downloadBatchFile(item: FileItem, signal: AbortSignal) {
+    const meter = transferMeterRef.current;
+    const baseBytes = meter?.confirmedBytes ?? 0;
+    const file = await relay.download(item.path, {
+      signal,
+      onProgress: (receivedBytes) => reportTransferBytes(baseBytes + receivedBytes)
+    });
+    if (meter) meter.confirmedBytes = baseBytes + file.blob.size;
+    reportTransferBytes(baseBytes + file.blob.size, true);
+    return file;
+  }
+
+  async function checkpointBatch(
+    batch: DownloadBatch,
+    nextIndex: number,
+    nextPart = batch.nextPart
+  ): Promise<DownloadBatch> {
+    const checkpoint = { ...batch, nextIndex, nextPart };
+    await saveDownloadProgress(queueOwnerId, batch.id, { nextIndex, nextPart });
     setPendingBatch(checkpoint);
     return checkpoint;
   }
 
-  async function downloadIndividualBatch(batch: DownloadBatch) {
+  async function downloadIndividualBatch(batch: DownloadBatch, signal: AbortSignal) {
     for (let index = batch.nextIndex; index < batch.files.length; index += 1) {
+      throwIfCancelled(signal);
       const item = batch.files[index];
       setBulkProgress({
         completed: index,
@@ -184,10 +345,10 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
         label: item.name,
         phase: "downloading"
       });
-      const file = await relay.download(item.path);
+      const file = await downloadBatchFile(item, signal);
       saveBlob(file.blob, file.name);
-      checkpointBatch(batch, index + 1);
-      await shortReceiverPause();
+      await checkpointBatch(batch, index + 1);
+      await shortReceiverPause(signal);
       if ((index + 1) % RECEIVER_BATCH_SIZE === 0 && index + 1 < batch.files.length) {
         setBulkProgress({
           completed: index + 1,
@@ -195,30 +356,55 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
           label: "Pausing briefly to keep this device responsive…",
           phase: "downloading"
         });
-        await receiverPause();
+        await receiverPause(signal);
       }
     }
   }
 
-  async function downloadZipBatch(batch: DownloadBatch) {
-    const parts = zipParts(batch.files);
-    let partStart = 0;
-    for (const [partIndex, part] of parts.entries()) {
-      const partEnd = partStart + part.length;
-      if (partEnd <= batch.nextIndex) {
-        partStart = partEnd;
-        continue;
+  async function downloadZipBatch(batch: DownloadBatch, signal: AbortSignal) {
+    const parts = splitArchiveParts(batch.files);
+    const firstPendingPart = batch.nextPart ?? inferCompletedArchiveParts(parts, batch.nextIndex);
+    let nextIndex = batch.nextIndex;
+    for (let partIndex = firstPendingPart; partIndex < parts.length; partIndex += 1) {
+      const part = parts[partIndex];
+      const { start: partStart, end: partEnd } = archivePartBounds(parts, partIndex);
+      for (let index = partStart; index < partEnd; index += 1) {
+        const item = batch.files[index];
+        throwIfCancelled(signal);
+        let staged = await loadStagedArchiveFile(queueOwnerId, batch.id, index);
+        if (!staged) {
+          setBulkProgress({
+            completed: index,
+            total: batch.files.length,
+            label: item.archivePath,
+            phase: "downloading"
+          });
+          const file = await downloadBatchFile(item, signal);
+          try {
+            await saveStagedArchiveFile(queueOwnerId, batch.id, index, file.blob);
+          } catch {
+            throw new Error("The browser could not preserve this file for resume. Free some browser storage and try again.");
+          }
+          staged = file.blob;
+        }
+        const checkpointIndex = Math.max(nextIndex, index + 1);
+        if (checkpointIndex !== nextIndex) {
+          nextIndex = checkpointIndex;
+          await checkpointBatch(batch, nextIndex, partIndex);
+        }
+        await shortReceiverPause(signal);
       }
+
       const archive: AsyncZippable = {};
       for (const [itemIndex, item] of part.entries()) {
-        setBulkProgress({
-          completed: partStart + itemIndex,
-          total: batch.files.length,
-          label: item.name,
-          phase: "downloading"
-        });
-        const file = await relay.download(item.path);
-        archive[uniqueArchiveName(file.name, archive)] = new Uint8Array(await file.blob.arrayBuffer());
+        throwIfCancelled(signal);
+        const staged = await loadStagedArchiveFile(queueOwnerId, batch.id, partStart + itemIndex);
+        if (!staged) {
+          throw new Error(`The staged copy of ${item.name} is unavailable. Reconnect the phone to download it again.`);
+        }
+        const data = new Uint8Array(await staged.arrayBuffer());
+        const modified = validArchiveDate(item.lastModified);
+        archive[item.archivePath] = modified ? [data, { mtime: modified }] : data;
       }
       setBulkProgress({
         completed: partEnd,
@@ -227,28 +413,38 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
         phase: "packing"
       });
       const zipped = await createZip(archive);
+      throwIfCancelled(signal);
       const zipName = archiveName(batch.folderPath, partIndex + 1, parts.length);
       saveBlob(new Blob([zipped], { type: "application/zip" }), zipName);
-      checkpointBatch(batch, partEnd);
-      partStart = partEnd;
-      await receiverPause();
+      await checkpointBatch(batch, nextIndex, partIndex + 1);
+      await deleteStagedArchiveFiles(
+        queueOwnerId,
+        batch.id,
+        part.map((_item, itemIndex) => partStart + itemIndex)
+      );
+      if (partIndex + 1 < parts.length) await receiverPause(signal);
     }
   }
 
-  async function runBatch(batch: DownloadBatch) {
-    if (batch.mode === "individual") await downloadIndividualBatch(batch);
-    else await downloadZipBatch(batch);
+  async function runBatch(batch: DownloadBatch, signal: AbortSignal) {
+    if (batch.mode === "individual") await downloadIndividualBatch(batch, signal);
+    else await downloadZipBatch(batch, signal);
   }
 
   async function startOrResumeBatch(batch: DownloadBatch, successNotice?: string) {
-    if (bulkProgress) return;
+    if (batchRunActiveRef.current || bulkProgress) return;
+    batchRunActiveRef.current = true;
+    const abortController = new AbortController();
+    batchAbortControllerRef.current = abortController;
+    startTransferMeter();
     setError(null);
     setNotice(null);
     try {
-      await runBatch(batch);
-      clearDownloadBatch(queueOwnerId);
+      await runBatch(batch, abortController.signal);
+      await clearDownloadBatch(queueOwnerId);
+      await clearStagedArchiveFiles(queueOwnerId, batch.id);
       setPendingBatch(null);
-      const parts = zipParts(batch.files);
+      const parts = splitArchiveParts(batch.files);
       setNotice(successNotice ?? (
         batch.mode === "individual"
           ? `Finished ${batch.files.length} file downloads. If only one appears, allow multiple downloads in your browser.`
@@ -258,79 +454,186 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
       ));
       leaveSelectionMode();
     } catch (caught) {
-      const saved = loadDownloadBatch(queueOwnerId) ?? batch;
+      if (isAbortError(caught)) {
+        await clearDownloadBatch(queueOwnerId);
+        await clearStagedArchiveFiles(queueOwnerId, batch.id);
+        setPendingBatch(null);
+        setError(null);
+        setNotice(batch.mode === "zip"
+          ? "Download cancelled. ZIPs already saved were kept; staged browser copies were removed."
+          : "Download cancelled. Files already saved on this device were kept.");
+        leaveSelectionMode();
+        return;
+      }
+      const saved = await loadDownloadBatch(queueOwnerId) ?? batch;
       setPendingBatch(saved);
       const completed = saved.nextIndex;
       const detail = caught instanceof Error ? caught.message : "The connection was interrupted.";
       setError(
-        `Download paused after ${completed} of ${saved.files.length}. ${detail} Resume to continue without repeating completed ${saved.mode === "zip" ? "ZIP parts" : "files"}.`
+        `Download paused after ${completed} of ${saved.files.length}. ${detail} Resume to continue without repeating ${saved.mode === "zip" ? "staged files or completed ZIP parts" : "completed files"}.`
       );
     } finally {
+      if (batchAbortControllerRef.current === abortController) {
+        batchAbortControllerRef.current = null;
+      }
+      batchRunActiveRef.current = false;
+      transferMeterRef.current = null;
       setBulkProgress(null);
     }
   }
 
+  function cancelActiveBatch() {
+    const abortController = batchAbortControllerRef.current;
+    if (!abortController) return;
+    const message = bulkProgress?.phase === "scanning"
+      ? "Cancel preparing the selected folders? Nothing will be downloaded."
+      : "Cancel the remaining downloads? Files already downloaded will stay on this device.";
+    if (!window.confirm(message)) return;
+    abortController.abort();
+  }
+
+  useEffect(() => {
+    if (!pendingCanResume) {
+      autoResumeAttemptedRef.current = false;
+      return;
+    }
+    if (!downloadQueueReady || !pendingBatch || bulkProgress || autoResumeAttemptedRef.current) return;
+
+    autoResumeAttemptedRef.current = true;
+    void startOrResumeBatch(pendingBatch);
+  }, [bulkProgress, downloadQueueReady, pendingBatch, pendingCanResume]);
+
   async function handleIndividualDownloads() {
-    if (selectedFiles.length === 0 || bulkProgress || pendingBatch) return;
+    if (!downloadQueueReady || selectedFiles.length === 0 || selectedFolders.length > 0 || bulkProgress || pendingBatch) return;
     const batch = createDownloadBatch("individual", path, selectedFiles);
-    saveDownloadBatch(queueOwnerId, batch);
+    await saveDownloadBatch(queueOwnerId, batch);
     setPendingBatch(batch);
     await startOrResumeBatch(batch);
   }
 
   async function handleZipDownload() {
-    if (selectedFiles.length === 0 || bulkProgress || pendingBatch) return;
-    const batch = createDownloadBatch("zip", path, selectedFiles);
-    saveDownloadBatch(queueOwnerId, batch);
-    setPendingBatch(batch);
-    await startOrResumeBatch(batch);
+    if (!downloadQueueReady || selectedItems.length === 0 || bulkProgress || pendingBatch) return;
+    const scanAbortController = new AbortController();
+    batchAbortControllerRef.current = scanAbortController;
+    setError(null);
+    setNotice(null);
+    setBulkProgress({
+      completed: 0,
+      total: selectedItems.length,
+      label: "Finding files in the selected folders…",
+      phase: "scanning"
+    });
+    try {
+      const archiveFiles = await collectSelectedArchiveFiles(
+        selectedItems,
+        path,
+        async (folderPath) => {
+          const response = await abortablePromise(
+            relay.request<StorageListResponse>(
+              "storage.list",
+              { path: folderPath },
+              STORAGE_LIST_TIMEOUT_MS
+            ),
+            scanAbortController.signal
+          );
+          return response.items;
+        },
+        {
+          signal: scanAbortController.signal,
+          onProgress: ({ foldersScanned, filesFound, currentPath }) => setBulkProgress({
+            completed: foldersScanned,
+            total: Math.max(foldersScanned + 1, selectedItems.length),
+            label: `${filesFound} files found · ${currentPath}`,
+            phase: "scanning"
+          })
+        }
+      );
+      if (archiveFiles.length === 0) {
+        setNotice("The selected folders are empty. Nothing was downloaded.");
+        return;
+      }
+      await requestPersistentArchiveStorage();
+      const batch = createDownloadBatch("zip", path, archiveFiles);
+      await saveDownloadBatch(queueOwnerId, batch);
+      setPendingBatch(batch);
+      setBulkProgress(null);
+      if (batchAbortControllerRef.current === scanAbortController) {
+        batchAbortControllerRef.current = null;
+      }
+      await startOrResumeBatch(batch);
+    } catch (caught) {
+      if (isAbortError(caught)) {
+        setNotice("Folder preparation cancelled. Nothing was downloaded.");
+      } else {
+        setError(caught instanceof Error ? caught.message : "Could not prepare the selected folders.");
+      }
+    } finally {
+      if (batchAbortControllerRef.current === scanAbortController) {
+        batchAbortControllerRef.current = null;
+      }
+      setBulkProgress(null);
+    }
   }
 
   async function handleDownloadRemaining() {
-    if (selectedFiles.length === 0 || bulkProgress || pendingBatch) return;
+    if (!downloadQueueReady || selectedFiles.length === 0 || selectedFolders.length > 0 || bulkProgress || pendingBatch) return;
     const picker = (window as DirectoryPickerWindow).showDirectoryPicker;
-    if (!picker) {
-      setError("Download remaining requires desktop Chrome or Edge on a secure HTTPS page.");
-      return;
-    }
-
     const selection = [...selectedFiles];
     setError(null);
     setNotice(null);
     try {
-      const directory = await picker.call(window, {
-        id: "between-downloads-folder",
-        mode: "read",
-        startIn: "downloads"
-      });
-      setBulkProgress({
-        completed: 0,
-        total: selection.length,
-        label: `Checking ${directory.name} and its subfolders…`,
-        phase: "scanning"
-      });
-      const diskNames = await collectDirectoryFileNames(directory, (fileCount) => {
+      let directoryName: string;
+      let diskNames: Set<string>;
+
+      const updateScanProgress = (fileCount: number) => {
         setBulkProgress({
           completed: 0,
           total: selection.length,
           label: `${new Intl.NumberFormat().format(fileCount)} local filenames checked…`,
           phase: "scanning"
         });
-      });
+      };
+
+      if (picker) {
+        const directory = await picker.call(window, {
+          id: "between-downloads-folder",
+          mode: "read",
+          startIn: "downloads"
+        });
+        directoryName = directory.name;
+        setBulkProgress({
+          completed: 0,
+          total: selection.length,
+          label: `Checking ${directoryName} and its subfolders…`,
+          phase: "scanning"
+        });
+        diskNames = await collectDirectoryFileNames(directory, updateScanProgress);
+      } else {
+        const directory = await selectDirectoryFiles();
+        directoryName = directory.directoryName;
+        setBulkProgress({
+          completed: 0,
+          total: selection.length,
+          label: `Checking ${directoryName} and its subfolders…`,
+          phase: "scanning"
+        });
+        diskNames = collectSelectedFileNames(directory.files, updateScanProgress);
+      }
+
       const remaining = filesMissingByName(selection, diskNames);
       const skipped = selection.length - remaining.length;
       if (remaining.length === 0) {
-        setNotice(`All ${selection.length} selected filenames already exist in ${directory.name}.`);
+        setNotice(`All ${selection.length} selected filenames already exist in ${directoryName}.`);
         leaveSelectionMode();
         return;
       }
 
       const batch = createDownloadBatch("individual", path, remaining);
-      saveDownloadBatch(queueOwnerId, batch);
+      await saveDownloadBatch(queueOwnerId, batch);
       setPendingBatch(batch);
       await startOrResumeBatch(
         batch,
-        `Downloaded ${remaining.length} missing files and skipped ${skipped} filenames already found in ${directory.name}.`
+        `Downloaded ${remaining.length} missing files and skipped ${skipped} filenames already found in ${directoryName}.`
       );
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === "AbortError") {
@@ -343,9 +646,10 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
     }
   }
 
-  function discardPendingBatch() {
+  async function discardPendingBatch() {
     if (!pendingBatch || !window.confirm("Discard this saved download queue? Files already downloaded will stay on this device.")) return;
-    clearDownloadBatch(queueOwnerId);
+    await clearDownloadBatch(queueOwnerId);
+    await clearStagedArchiveFiles(queueOwnerId, pendingBatch.id);
     setPendingBatch(null);
     setError(null);
   }
@@ -384,17 +688,17 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
               <Home aria-hidden size={16} /><span>Shared folders</span>
             </button>
             <span className="storage-toolbar-spacer" />
-            {files.length > 0 ? (
+            {sortedItems.length > 0 ? (
               <button type="button" className="soft-button" onClick={() => setSelectionMode(true)}>
                 <ListChecks aria-hidden size={16} /><span>Select</span>
               </button>
             ) : null}
           </>
         ) : (
-          <div className="selection-toolbar" aria-label="Selected file actions">
-            <strong className="selection-count">{selectedFiles.length} selected</strong>
-            <button type="button" className="soft-button" onClick={toggleAllFiles} disabled={bulkProgress !== null}>
-              {selectedFiles.length === files.length ? "Clear all" : "Select all"}
+          <div className="selection-toolbar" aria-label="Selected item actions">
+            <strong className="selection-count">{selectedItems.length} selected</strong>
+            <button type="button" className="soft-button" onClick={toggleAllItems} disabled={bulkProgress !== null}>
+              {selectedItems.length === sortedItems.length ? "Clear all" : "Select all"}
             </button>
             <button
               type="button"
@@ -410,7 +714,8 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
                 type="button"
                 className="bulk-download-button"
                 onClick={() => void handleDownloadRemaining()}
-                disabled={selectedFiles.length === 0 || bulkProgress !== null || pendingBatch !== null}
+                disabled={!downloadQueueReady || selectedFiles.length === 0 || selectedFolders.length > 0 || bulkProgress !== null || pendingBatch !== null}
+                title={selectedFolders.length > 0 ? "Folders can be downloaded with Download ZIP." : undefined}
               >
                 <FolderSearch aria-hidden size={16} />
                 <span>Download remaining</span>
@@ -419,7 +724,8 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
                 type="button"
                 className="bulk-download-button secondary"
                 onClick={() => void handleIndividualDownloads()}
-                disabled={selectedFiles.length === 0 || bulkProgress !== null || pendingBatch !== null}
+                disabled={!downloadQueueReady || selectedFiles.length === 0 || selectedFolders.length > 0 || bulkProgress !== null || pendingBatch !== null}
+                title={selectedFolders.length > 0 ? "Folders can be downloaded with Download ZIP." : undefined}
               >
                 <Download aria-hidden size={16} />
                 <span>Download files</span>
@@ -428,15 +734,44 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
                 type="button"
                 className="bulk-download-button secondary"
                 onClick={() => void handleZipDownload()}
-                disabled={selectedFiles.length === 0 || bulkProgress !== null || pendingBatch !== null}
+                disabled={!downloadQueueReady || selectedItems.length === 0 || bulkProgress !== null || pendingBatch !== null}
               >
+                <Archive aria-hidden size={16} />
                 <span>Download ZIP</span>
               </button>
             </div>
           </div>
         )}
-        {!selectionMode && allFiles.length > 0 ? (
+        {!selectionMode && items.length > 0 ? (
           <div className="file-organize-controls">
+            <div className="storage-search">
+              <Search className="storage-search-icon" aria-hidden size={18} />
+              <label className="sr-only" htmlFor="storage-folder-search">Search file names</label>
+              <input
+                id="storage-folder-search"
+                type="search"
+                name="storage-search"
+                className="storage-search-input"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") setSearchQuery("");
+                }}
+                placeholder="Search file names…"
+                autoComplete="off"
+                spellCheck={false}
+              />
+              {searchQuery ? (
+                <button
+                  type="button"
+                  className="storage-search-clear"
+                  onClick={() => setSearchQuery("")}
+                  aria-label="Clear file name search"
+                >
+                  <X aria-hidden size={17} />
+                </button>
+              ) : <span className="storage-search-clear-placeholder" aria-hidden />}
+            </div>
             <div className="file-filter-bar">
               <span className="file-filter-label" aria-hidden>
                 <ListFilter size={16} />
@@ -500,16 +835,37 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
 
       <div className="storage-content">
         {bulkProgress ? (
-          <div className="bulk-progress" role="status" aria-live="polite">
-            <div>
-              <strong>
-                {bulkProgress.phase === "packing"
-                  ? "Preparing download"
-                  : bulkProgress.phase === "scanning"
-                    ? "Scanning chosen folder"
-                    : `Downloading ${bulkProgress.completed + 1} of ${bulkProgress.total}`}
-              </strong>
-              <span>{bulkProgress.label}</span>
+          <div className="bulk-progress">
+            <div className="bulk-progress-header">
+              <div className="bulk-progress-copy">
+                <div className="bulk-progress-status" role="status" aria-live="polite">
+                  <strong>
+                    {bulkProgress.phase === "packing"
+                      ? "Preparing download"
+                      : bulkProgress.phase === "scanning"
+                        ? "Preparing selected folders"
+                        : `Downloading ${bulkProgress.completed + 1} of ${bulkProgress.total}`}
+                  </strong>
+                  <span className="bulk-progress-label">{bulkProgress.label}</span>
+                </div>
+                {bulkProgress.phase === "downloading" && transferSpeedBps !== null ? (
+                  <span
+                    className="bulk-progress-speed"
+                    aria-label={`Current transfer speed ${formatTransferSpeed(transferSpeedBps)}`}
+                  >
+                    {formatTransferSpeed(transferSpeedBps)}
+                  </span>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                className="icon-button compact-icon-button bulk-cancel-button"
+                onClick={cancelActiveBatch}
+                aria-label={bulkProgress.phase === "scanning" ? "Cancel folder preparation" : "Cancel remaining downloads"}
+                title={bulkProgress.phase === "scanning" ? "Cancel preparation" : "Cancel download"}
+              >
+                <X aria-hidden size={18} />
+              </button>
             </div>
             {bulkProgress.phase === "scanning"
               ? <progress />
@@ -525,7 +881,10 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
             <div className="download-resume-copy">
               <strong>{pendingBatch.files.length - pendingBatch.nextIndex} {pendingBatch.mode === "zip" ? "files" : "downloads"} waiting</strong>
               <span>
-                {pendingBatch.nextIndex} of {pendingBatch.files.length} completed. Progress is saved in this browser.
+                {pendingBatch.mode === "zip"
+                  ? `${pendingBatch.nextIndex} of ${pendingBatch.files.length} files staged; ${pendingBatch.nextPart ?? inferCompletedArchiveParts(splitArchiveParts(pendingBatch.files), pendingBatch.nextIndex)} ZIP parts saved.`
+                  : `${pendingBatch.nextIndex} of ${pendingBatch.files.length} completed.`}
+                {pendingCanResume ? " Progress is saved in this browser." : " It will resume when the phone is available."}
               </span>
             </div>
             <div className="download-resume-actions">
@@ -533,12 +892,12 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
                 type="button"
                 className="bulk-download-button"
                 onClick={() => void startOrResumeBatch(pendingBatch)}
-                disabled={!storageAvailable}
+                disabled={!pendingCanResume}
               >
                 <RotateCcw aria-hidden size={16} />
-                <span>{storageAvailable ? "Resume" : deviceOnline ? "Files paused" : "Waiting for phone"}</span>
+                <span>{pendingCanResume ? "Resume" : deviceOnline ? "Files paused" : "Waiting for phone"}</span>
               </button>
-              <button type="button" className="soft-button" onClick={discardPendingBatch}>
+              <button type="button" className="soft-button" onClick={() => void discardPendingBatch()}>
                 <Trash2 aria-hidden size={15} />
                 <span>Discard</span>
               </button>
@@ -553,8 +912,17 @@ export function StoragePanel({ relay, queueOwnerId, fullScreen = false, onClose 
         {!loading && !error && items.length === 0 ? <div className="storage-state" role="status">This folder is empty.</div> : null}
         {!loading && !error && items.length > 0 && filteredItems.length === 0 ? (
           <div className="storage-state filtered-empty" role="status">
-            <span>No {fileFilterOptions.find((option) => option.value === fileFilter)?.label.toLowerCase()} in this folder.</span>
-            <button type="button" className="soft-button" onClick={() => setFileFilter("all")}>Show all files</button>
+            {hasSearchQuery ? (
+              <>
+                <span>No items match “{deferredSearchQuery.trim()}”.</span>
+                <button type="button" className="soft-button" onClick={() => setSearchQuery("")}>Clear search</button>
+              </>
+            ) : (
+              <>
+                <span>No {fileFilterOptions.find((option) => option.value === fileFilter)?.label.toLowerCase()} in this folder.</span>
+                <button type="button" className="soft-button" onClick={() => setFileFilter("all")}>Show all files</button>
+              </>
+            )}
           </div>
         ) : null}
         {!loading && !error && filteredItems.length > 0 ? (
@@ -600,44 +968,87 @@ function createZip(files: AsyncZippable): Promise<Uint8Array<ArrayBuffer>> {
   });
 }
 
-function uniqueArchiveName(name: string, archive: AsyncZippable): string {
-  if (!(name in archive)) return name;
-  const extensionIndex = name.lastIndexOf(".");
-  const base = extensionIndex > 0 ? name.slice(0, extensionIndex) : name;
-  const extension = extensionIndex > 0 ? name.slice(extensionIndex) : "";
-  let copy = 2;
-  while (`${base} (${copy})${extension}` in archive) copy += 1;
-  return `${base} (${copy})${extension}`;
-}
-
 function archiveName(path: string, part: number, totalParts: number): string {
   const folder = path.split("/").filter(Boolean).at(-1) ?? "shared-files";
   const safeFolder = folder.replace(/[<>:"/\\|?*\u0000-\u001F]/g, "-").trim() || "shared-files";
   return totalParts > 1 ? `${safeFolder}-part-${part}-of-${totalParts}.zip` : `${safeFolder}.zip`;
 }
 
-function zipParts(items: FileItem[]): FileItem[][] {
-  const chunks: FileItem[][] = [];
-  let current: FileItem[] = [];
-  let currentBytes = 0;
-  for (const item of items) {
-    const size = item.size ?? 0;
-    if (current.length > 0 && (current.length >= ZIP_PART_SIZE || currentBytes + size > ZIP_PART_BYTES)) {
-      chunks.push(current);
-      current = [];
-      currentBytes = 0;
-    }
-    current.push(item);
-    currentBytes += size;
+function receiverPause(signal: AbortSignal): Promise<void> {
+  return abortableDelay(RECEIVER_BATCH_PAUSE_MS, signal);
+}
+
+function validArchiveDate(value: string | null): Date | null {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function shortReceiverPause(signal: AbortSignal): Promise<void> {
+  return abortableDelay(INTER_FILE_PAUSE_MS, signal);
+}
+
+function abortableDelay(durationMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(downloadCancelledError());
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      signal.removeEventListener("abort", handleAbort);
+      resolve();
+    }, durationMs);
+    const handleAbort = () => {
+      window.clearTimeout(timeout);
+      reject(downloadCancelledError());
+    };
+    signal.addEventListener("abort", handleAbort, { once: true });
+  });
+}
+
+function abortablePromise<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(downloadCancelledError());
+  return new Promise((resolve, reject) => {
+    const handleAbort = () => {
+      reject(downloadCancelledError());
+    };
+    signal.addEventListener("abort", handleAbort, { once: true });
+    void promise.then(
+      (value) => {
+        signal.removeEventListener("abort", handleAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", handleAbort);
+        reject(error);
+      }
+    );
+  });
+}
+
+function throwIfCancelled(signal: AbortSignal): void {
+  if (signal.aborted) throw downloadCancelledError();
+}
+
+function downloadCancelledError(): Error {
+  const error = new Error("Download cancelled.");
+  error.name = "AbortError";
+  return error;
+}
+
+function isAbortError(error: unknown): error is Error {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function formatTransferSpeed(bytesPerSecond: number): string {
+  if (bytesPerSecond < 1024) return `${transferNumberFormatter.format(bytesPerSecond)}\u00a0B/s`;
+  if (bytesPerSecond < 1024 * 1024) {
+    return `${transferNumberFormatter.format(bytesPerSecond / 1024)}\u00a0KB/s`;
   }
-  if (current.length > 0) chunks.push(current);
-  return chunks;
+  return `${transferNumberFormatter.format(bytesPerSecond / 1024 / 1024)}\u00a0MB/s`;
 }
 
-function receiverPause(): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, 900));
-}
-
-function shortReceiverPause(): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, 250));
+function canPackStagedArchivePart(batch: DownloadBatch): boolean {
+  if (batch.mode !== "zip") return false;
+  const parts = splitArchiveParts(batch.files);
+  const partIndex = batch.nextPart ?? inferCompletedArchiveParts(parts, batch.nextIndex);
+  if (partIndex >= parts.length) return true;
+  return batch.nextIndex >= archivePartBounds(parts, partIndex).end;
 }

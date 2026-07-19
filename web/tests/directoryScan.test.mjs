@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   collectDirectoryFileNames,
+  collectSelectedFileNames,
   filesMissingByName,
   normalizeFileName
 } from "../src/lib/directoryScan.ts";
@@ -40,6 +41,16 @@ test("recursively collects normalized filenames from the chosen directory", asyn
   const names = await collectDirectoryFileNames(root);
 
   assert.deepEqual(names, new Set(["photo.jpg", "notes.txt"]));
+});
+
+test("collects normalized filenames from a directory file selection", () => {
+  const progress = [];
+  const files = [file("Photo.JPG"), file("notes.txt")];
+
+  const names = collectSelectedFileNames(files, (count) => progress.push(count));
+
+  assert.deepEqual(names, new Set(["photo.jpg", "notes.txt"]));
+  assert.deepEqual(progress, [2]);
 });
 
 test("missing-file comparison is case insensitive and Unicode normalized", () => {

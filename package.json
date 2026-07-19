@@ -13,7 +13,7 @@
     "dev:web": "npm --workspace web run dev",
     "build": "npm --workspace shared/api-contracts run build && npm --workspace backend run build && npm --workspace web run build && npm --workspace cloudflare run build",
     "check": "npm --workspace shared/api-contracts run check && npm --workspace backend run check && npm --workspace web run check && npm --workspace cloudflare run check",
-    "test": "npm --workspace web run test && npm --workspace cloudflare run test",
+    "test": "npm --workspace backend run test && npm --workspace web run test && npm --workspace cloudflare run test",
     "deploy:cloudflare": "npm --workspace web run build && npm --workspace cloudflare run deploy"
   }
 }

@@ -34,7 +34,7 @@ export function FileRow({
 
   return (
     <li className={rowClassName}>
-      {selectionMode && !isFolder ? (
+      {selectionMode ? (
         <label className="file-select">
           <input
             type="checkbox"
@@ -44,20 +44,20 @@ export function FileRow({
             aria-label={`Select ${item.name}`}
           />
         </label>
-      ) : selectionMode ? <span className="file-select-placeholder" aria-hidden /> : null}
+      ) : null}
       <button
         type="button"
         className="file-main"
         onClick={() => {
-          if (isFolder) onOpenFolder(item);
-          else if (selectionMode) onToggleSelected(item);
+          if (selectionMode) onToggleSelected(item);
+          else if (isFolder) onOpenFolder(item);
           else onDownload(item);
         }}
         disabled={busy || downloading}
-        aria-label={isFolder
-          ? `Open ${item.name}`
-          : selectionMode
-            ? `${selected ? "Deselect" : "Select"} ${item.name}`
+        aria-label={selectionMode
+          ? `${selected ? "Deselect" : "Select"} ${item.name}`
+          : isFolder
+            ? `Open ${item.name}`
             : `Download ${item.name}`}
       >
         <span className={isFolder ? "file-icon folder" : "file-icon"}>

@@ -3,6 +3,7 @@ import { backendBaseUrl } from "./api";
 export interface RelayStatus {
   relayConnected: boolean;
   deviceOnline: boolean;
+  chatOnline: boolean;
   storageSharingEnabled: boolean;
 }
 
@@ -14,11 +15,20 @@ interface PendingRequest {
 
 interface PendingDownload {
   chunks: Uint8Array[];
+  bytesReceived: number;
   name: string;
   mimeType: string;
   resolve: (file: { blob: Blob; name: string }) => void;
   reject: (error: Error) => void;
   timeout: number;
+  signal?: AbortSignal;
+  abortListener?: () => void;
+  onProgress?: (receivedBytes: number) => void;
+}
+
+interface DownloadOptions {
+  signal?: AbortSignal;
+  onProgress?: (receivedBytes: number) => void;
 }
 
 type StatusListener = (status: RelayStatus) => void;
@@ -32,6 +42,7 @@ export class RelayClient {
   private status: RelayStatus = {
     relayConnected: false,
     deviceOnline: false,
+    chatOnline: false,
     storageSharingEnabled: false
   };
   private readonly listeners = new Set<StatusListener>();
@@ -98,32 +109,51 @@ export class RelayClient {
     });
   }
 
-  download(path: string): Promise<{ blob: Blob; name: string }> {
-    return this.startDownload("storage.download", { path });
+  download(path: string, options: DownloadOptions = {}): Promise<{ blob: Blob; name: string }> {
+    return this.startDownload("storage.download", { path }, options);
   }
 
   downloadAttachment(attachmentId: string): Promise<{ blob: Blob; name: string }> {
     return this.startDownload("chat.attachment.download", { attachmentId });
   }
 
-  private startDownload(type: string, payload: Record<string, unknown>): Promise<{ blob: Blob; name: string }> {
+  private startDownload(
+    type: string,
+    payload: Record<string, unknown>,
+    options: DownloadOptions = {}
+  ): Promise<{ blob: Blob; name: string }> {
+    const { signal, onProgress } = options;
     if (!this.registered || !this.status.deviceOnline || this.socket?.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("The phone is offline."));
     }
+    if (signal?.aborted) return Promise.reject(downloadCancelledError());
     const requestId = crypto.randomUUID();
     return new Promise((resolve, reject) => {
       const timeout = window.setTimeout(() => {
-        this.downloads.delete(requestId);
-        reject(new Error("The download timed out."));
+        this.cancelRemoteDownload(requestId);
+        const download = this.takeDownload(requestId);
+        download?.reject(new Error("The download timed out."));
       }, 10 * 60_000);
-      this.downloads.set(requestId, {
+      const download: PendingDownload = {
         chunks: [],
+        bytesReceived: 0,
         name: "download",
         mimeType: "application/octet-stream",
         resolve,
         reject,
-        timeout
-      });
+        timeout,
+        signal,
+        onProgress
+      };
+      if (signal) {
+        download.abortListener = () => {
+          this.cancelRemoteDownload(requestId);
+          const cancelled = this.takeDownload(requestId);
+          cancelled?.reject(downloadCancelledError());
+        };
+        signal.addEventListener("abort", download.abortListener, { once: true });
+      }
+      this.downloads.set(requestId, download);
       this.socket?.send(JSON.stringify({
         type,
         requestId,
@@ -144,7 +174,8 @@ export class RelayClient {
       this.registered = true;
       this.setStatus({
         relayConnected: true,
-        deviceOnline: message.online === true,
+        deviceOnline: message.available === true || (message.available === undefined && message.online === true),
+        chatOnline: message.chatOnline === true || (message.chatOnline === undefined && message.available === undefined && message.online === true),
         storageSharingEnabled: message.storageSharingEnabled === true
       });
       return;
@@ -152,7 +183,8 @@ export class RelayClient {
     if (type === "device.status") {
       this.setStatus({
         relayConnected: true,
-        deviceOnline: message.online === true,
+        deviceOnline: message.available === true || (message.available === undefined && message.online === true),
+        chatOnline: message.chatOnline === true || (message.chatOnline === undefined && message.available === undefined && message.online === true),
         storageSharingEnabled: message.storageSharingEnabled === true
       });
       return;
@@ -167,9 +199,8 @@ export class RelayClient {
     if (type === "response") {
       const download = this.downloads.get(requestId);
       if (download && message.ok !== true) {
-        window.clearTimeout(download.timeout);
-        this.downloads.delete(requestId);
-        download.reject(new Error(typeof message.error === "string" ? message.error : "Download failed."));
+        const failed = this.takeDownload(requestId);
+        failed?.reject(new Error(typeof message.error === "string" ? message.error : "Download failed."));
         return;
       }
       const pending = this.pending.get(requestId);
@@ -193,14 +224,15 @@ export class RelayClient {
     if (type === "download.chunk") {
       const download = this.downloads.get(requestId);
       if (!download || typeof message.data !== "string") return;
-      download.chunks.push(decodeBase64(message.data));
+      const chunk = decodeBase64(message.data);
+      download.chunks.push(chunk);
+      download.bytesReceived += chunk.byteLength;
+      download.onProgress?.(download.bytesReceived);
       return;
     }
     if (type === "download.complete") {
-      const download = this.downloads.get(requestId);
+      const download = this.takeDownload(requestId);
       if (!download) return;
-      window.clearTimeout(download.timeout);
-      this.downloads.delete(requestId);
       download.resolve({
         blob: new Blob(download.chunks as BlobPart[], { type: download.mimeType }),
         name: download.name
@@ -211,7 +243,7 @@ export class RelayClient {
   private handleDisconnect(): void {
     this.socket = null;
     this.registered = false;
-    this.setStatus({ relayConnected: false, deviceOnline: false, storageSharingEnabled: false });
+    this.setStatus({ relayConnected: false, deviceOnline: false, chatOnline: false, storageSharingEnabled: false });
     this.rejectPending("Relay connection lost.");
     if (!this.closed) {
       this.reconnectTimer = window.setTimeout(() => this.connect(), 2_000);
@@ -224,11 +256,25 @@ export class RelayClient {
       request.reject(new Error(reason));
     }
     this.pending.clear();
-    for (const download of this.downloads.values()) {
-      window.clearTimeout(download.timeout);
-      download.reject(new Error(reason));
+    for (const requestId of [...this.downloads.keys()]) {
+      this.takeDownload(requestId)?.reject(new Error(reason));
     }
-    this.downloads.clear();
+  }
+
+  private takeDownload(requestId: string): PendingDownload | null {
+    const download = this.downloads.get(requestId);
+    if (!download) return null;
+    window.clearTimeout(download.timeout);
+    if (download.signal && download.abortListener) {
+      download.signal.removeEventListener("abort", download.abortListener);
+    }
+    this.downloads.delete(requestId);
+    return download;
+  }
+
+  private cancelRemoteDownload(requestId: string): void {
+    if (this.socket?.readyState !== WebSocket.OPEN) return;
+    this.socket.send(JSON.stringify({ type: "download.cancel", requestId }));
   }
 
   private setStatus(status: RelayStatus): void {
@@ -253,4 +299,10 @@ function decodeBase64(value: string): Uint8Array {
     bytes[index] = binary.charCodeAt(index);
   }
   return bytes;
+}
+
+function downloadCancelledError(): Error {
+  const error = new Error("Download cancelled.");
+  error.name = "AbortError";
+  return error;
 }

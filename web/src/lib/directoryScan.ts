@@ -15,6 +15,23 @@ export function normalizeFileName(name: string): string {
   return name.normalize("NFC").toLocaleLowerCase();
 }
 
+export function collectSelectedFileNames(
+  files: Iterable<Pick<File, "name">>,
+  onProgress?: (fileCount: number) => void
+): Set<string> {
+  const names = new Set<string>();
+  let fileCount = 0;
+
+  for (const file of files) {
+    names.add(normalizeFileName(file.name));
+    fileCount += 1;
+    if (fileCount % 250 === 0) onProgress?.(fileCount);
+  }
+
+  onProgress?.(fileCount);
+  return names;
+}
+
 export async function collectDirectoryFileNames(
   directory: ReadableDirectoryEntry,
   onProgress?: (fileCount: number) => void

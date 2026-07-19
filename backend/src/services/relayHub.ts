@@ -1,6 +1,13 @@
 import { timingSafeEqual } from "node:crypto";
 import WebSocket, { type RawData } from "ws";
 import { z } from "zod";
+import {
+  canClaimPairingSlot,
+  hasOpenPairingSlot,
+  normalizeClaimedClientTypes,
+  PAIRING_CLIENT_TYPES,
+  type PairingClientType
+} from "./pairingSlots.js";
 
 const deviceRegistrationSchema = z.object({
   type: z.literal("register.device"),
@@ -10,12 +17,19 @@ const deviceRegistrationSchema = z.object({
   pairingCode: z.string().regex(/^\d{6}$/),
   accessToken: z.string().min(32).max(256),
   pairingAvailable: z.boolean(),
+  pairedClientTypes: z.array(z.enum(PAIRING_CLIENT_TYPES)).max(PAIRING_CLIENT_TYPES.length).optional(),
+  chatVisible: z.boolean().optional().default(false),
   storageSharingEnabled: z.boolean()
 });
 
 const viewerRegistrationSchema = z.object({
   type: z.literal("register.viewer"),
   accessToken: z.string().min(32).max(256)
+});
+
+const downloadCancelSchema = z.object({
+  type: z.literal("download.cancel"),
+  requestId: z.string().min(1).max(128)
 });
 
 const viewerCommandSchema = z.object({
@@ -52,7 +66,8 @@ interface RegisteredDevice {
   deviceName: string;
   pairingCode: string;
   accessToken: string;
-  pairingAvailable: boolean;
+  claimedClientTypes: Set<PairingClientType>;
+  chatVisible: boolean;
   storageSharingEnabled: boolean;
 }
 
@@ -70,7 +85,7 @@ export interface PairingClaim {
 export interface PairingViewer {
   viewerDeviceId: string;
   deviceName: string;
-  clientType: "web" | "android";
+  clientType: PairingClientType;
 }
 
 type SocketIdentity =
@@ -109,12 +124,18 @@ export class RelayHub {
 
   claimPairingCode(code: string, viewer: PairingViewer): PairingClaim | null {
     const device = this.devicesByCode.get(code);
-    if (!device || device.socket.readyState !== WebSocket.OPEN || !device.pairingAvailable) {
+    if (
+      !device ||
+      device.socket.readyState !== WebSocket.OPEN ||
+      !canClaimPairingSlot(device.claimedClientTypes, viewer.clientType)
+    ) {
       return null;
     }
 
-    device.pairingAvailable = false;
-    this.devicesByCode.delete(code);
+    device.claimedClientTypes.add(viewer.clientType);
+    if (!hasOpenPairingSlot(device.claimedClientTypes)) {
+      this.devicesByCode.delete(code);
+    }
     this.send(device.socket, {
       type: "pairing.claimed",
       viewerDeviceId: viewer.viewerDeviceId,
@@ -152,7 +173,11 @@ export class RelayHub {
     }
 
     if (identity.role === "viewer") {
-      this.forwardViewerCommand(socket, identity.accessToken, parsed);
+      if (parsed.type === "download.cancel") {
+        this.cancelViewerDownload(socket, identity.accessToken, parsed);
+      } else {
+        this.forwardViewerCommand(socket, identity.accessToken, parsed);
+      }
     } else {
       if (parsed.type === "device.update") {
         this.updateDevice(identity.accessToken, parsed);
@@ -162,6 +187,15 @@ export class RelayHub {
         this.forwardDeviceReply(identity.accessToken, parsed);
       }
     }
+  }
+
+  private cancelViewerDownload(socket: WebSocket, accessToken: string, message: Record<string, unknown>): void {
+    const parsed = downloadCancelSchema.safeParse(message);
+    if (!parsed.success) return;
+    const pending = this.pending.get(parsed.data.requestId);
+    if (!pending || pending.viewer !== socket || pending.deviceAccessToken !== accessToken) return;
+    clearTimeout(pending.timeout);
+    this.pending.delete(parsed.data.requestId);
   }
 
   private registerDevice(socket: WebSocket, message: Record<string, unknown>): void {
@@ -183,16 +217,20 @@ export class RelayHub {
       deviceName: parsed.data.deviceName,
       pairingCode: parsed.data.pairingCode,
       accessToken: parsed.data.accessToken,
-      pairingAvailable: parsed.data.pairingAvailable,
+      claimedClientTypes: normalizeClaimedClientTypes(
+        parsed.data.pairedClientTypes,
+        parsed.data.pairingAvailable
+      ),
+      chatVisible: parsed.data.chatVisible,
       storageSharingEnabled: parsed.data.storageSharingEnabled
     };
     this.identities.set(socket, { role: "device", accessToken: device.accessToken });
     this.devicesByToken.set(device.accessToken, device);
-    if (device.pairingAvailable) {
+    if (hasOpenPairingSlot(device.claimedClientTypes)) {
       this.devicesByCode.set(device.pairingCode, device);
     }
     this.send(socket, { type: "device.registered" });
-    this.broadcastStatus(device.accessToken, true, device.storageSharingEnabled);
+    this.broadcastStatus(device.accessToken, true, device.chatVisible, device.storageSharingEnabled);
     console.info(`Relay device connected: ${device.deviceName} (${device.deviceId})`);
   }
 
@@ -211,7 +249,9 @@ export class RelayHub {
     const device = this.devicesByToken.get(accessToken);
     this.send(socket, {
       type: "viewer.registered",
-      online: device?.socket.readyState === WebSocket.OPEN,
+      online: device?.socket.readyState === WebSocket.OPEN && device.chatVisible,
+      available: device?.socket.readyState === WebSocket.OPEN,
+      chatOnline: device?.socket.readyState === WebSocket.OPEN && device.chatVisible,
       storageSharingEnabled: device?.storageSharingEnabled ?? false,
       deviceName: device?.deviceName ?? null
     });
@@ -240,6 +280,7 @@ export class RelayHub {
       clearTimeout(existing.timeout);
       this.pending.delete(parsed.data.requestId);
     }
+    const responseTimeoutMs = parsed.data.type === "storage.list" ? 150_000 : 120_000;
     const timeout = setTimeout(() => {
       this.pending.delete(parsed.data.requestId);
       this.send(socket, {
@@ -248,7 +289,7 @@ export class RelayHub {
         ok: false,
         error: "The phone did not answer in time."
       });
-    }, 120_000);
+    }, responseTimeoutMs);
     this.pending.set(parsed.data.requestId, { viewer: socket, deviceAccessToken: accessToken, timeout });
     this.send(device.socket, parsed.data);
   }
@@ -269,13 +310,19 @@ export class RelayHub {
   private updateDevice(accessToken: string, message: Record<string, unknown>): void {
     const parsed = z.object({
       type: z.literal("device.update"),
-      storageSharingEnabled: z.boolean()
+      storageSharingEnabled: z.boolean().optional(),
+      chatVisible: z.boolean().optional()
     }).safeParse(message);
     if (!parsed.success) return;
     const device = this.devicesByToken.get(accessToken);
     if (!device) return;
-    device.storageSharingEnabled = parsed.data.storageSharingEnabled;
-    this.broadcastStatus(accessToken, true, device.storageSharingEnabled);
+    if (parsed.data.storageSharingEnabled !== undefined) {
+      device.storageSharingEnabled = parsed.data.storageSharingEnabled;
+    }
+    if (parsed.data.chatVisible !== undefined) {
+      device.chatVisible = parsed.data.chatVisible;
+    }
+    this.broadcastStatus(accessToken, true, device.chatVisible, device.storageSharingEnabled);
   }
 
   private detach(socket: WebSocket): void {
@@ -290,7 +337,7 @@ export class RelayHub {
         if (this.devicesByCode.get(device.pairingCode)?.socket === socket) {
           this.devicesByCode.delete(device.pairingCode);
         }
-        this.broadcastStatus(identity.accessToken, false, false);
+        this.broadcastStatus(identity.accessToken, false, false, false);
       }
       return;
     }
@@ -306,9 +353,20 @@ export class RelayHub {
     }
   }
 
-  private broadcastStatus(accessToken: string, online: boolean, storageSharingEnabled: boolean): void {
+  private broadcastStatus(
+    accessToken: string,
+    available: boolean,
+    chatOnline: boolean,
+    storageSharingEnabled: boolean
+  ): void {
     for (const viewer of this.viewersByToken.get(accessToken) ?? []) {
-      this.send(viewer, { type: "device.status", online, storageSharingEnabled });
+      this.send(viewer, {
+        type: "device.status",
+        online: chatOnline,
+        available,
+        chatOnline,
+        storageSharingEnabled
+      });
     }
   }
 

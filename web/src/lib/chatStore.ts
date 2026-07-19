@@ -14,6 +14,10 @@ function storageKey(session: AuthSession): string {
   return `private-chat-messages:${session.pairedToken.slice(-12)}`;
 }
 
+function deletedStorageKey(session: AuthSession): string {
+  return `private-chat-deleted-messages:${session.pairedToken.slice(-12)}`;
+}
+
 export function loadLocalMessages(session: AuthSession): Message[] {
   const raw = window.localStorage.getItem(storageKey(session));
   if (!raw) return [];
@@ -51,6 +55,25 @@ export function messageSyncRevision(message: Message): string {
       .join("")
   ].join("|");
   return fnv1a(canonical, 0x811c9dc5) + fnv1a(canonical, 0x9e3779b9);
+}
+
+export function loadDeletedMessageIds(session: AuthSession): Set<string> {
+  const raw = window.localStorage.getItem(deletedStorageKey(session));
+  if (!raw) return new Set();
+  try {
+    const messageIds = JSON.parse(raw) as unknown;
+    return new Set(Array.isArray(messageIds) ? messageIds.filter((id): id is string => typeof id === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+export function saveDeletedMessageIds(session: AuthSession, messageIds: ReadonlySet<string>): void {
+  window.localStorage.setItem(deletedStorageKey(session), JSON.stringify([...messageIds]));
+}
+
+export function filterDeletedMessages(messages: Message[], messageIds: ReadonlySet<string>): Message[] {
+  return messages.filter((message) => !messageIds.has(message.id));
 }
 
 export function mergeMessages(local: Message[], remote: Message[]): Message[] {

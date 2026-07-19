@@ -10,6 +10,7 @@ interface MessageListProps {
   viewerDeviceId: string;
   relay: RelayClient;
   remoteTyping: boolean;
+  onDeleteMessage: (messageId: string) => void;
 }
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -17,7 +18,7 @@ const timeFormatter = new Intl.DateTimeFormat(undefined, {
   minute: "2-digit"
 });
 
-export function MessageList({ messages, viewerDeviceId, relay, remoteTyping }: MessageListProps) {
+export function MessageList({ messages, viewerDeviceId, relay, remoteTyping, onDeleteMessage }: MessageListProps) {
   const endRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef(new Map<string, HTMLElement>());
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
@@ -87,6 +88,15 @@ export function MessageList({ messages, viewerDeviceId, relay, remoteTyping }: M
               )}
               <footer>
                 {message.editedAt ? <span>edited</span> : null}
+                <button
+                  type="button"
+                  className="message-delete-button"
+                  onClick={() => onDeleteMessage(message.id)}
+                  aria-label={`Delete message from this browser, sent ${timeFormatter.format(new Date(message.timestamp))}`}
+                  title="Delete from this browser"
+                >
+                  <Trash2 aria-hidden size={13} />
+                </button>
                 <time dateTime={message.timestamp}>{timeFormatter.format(new Date(message.timestamp))}</time>
                 {mine ? <MessageReceipt status={message.status} /> : null}
               </footer>

@@ -1,8 +1,18 @@
-import { HardDrive, LogOut, MessageCircle, RefreshCw, ShieldCheck } from "lucide-react";
+import { Download, HardDrive, LoaderCircle, LogOut, MessageCircle, RefreshCw, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { clearSession } from "../lib/auth";
-import { loadLocalMessages, mergeMessages, messageSyncRevision, saveLocalMessages } from "../lib/chatStore";
+import { buildChatExport } from "../lib/chatExport";
+import {
+  filterDeletedMessages,
+  loadDeletedMessageIds,
+  loadLocalMessages,
+  mergeMessages,
+  messageSyncRevision,
+  saveDeletedMessageIds,
+  saveLocalMessages
+} from "../lib/chatStore";
 import { navigate } from "../lib/navigation";
+import { setDocumentTitle, setFaviconStatus } from "../lib/favicon";
 import { RelayClient } from "../lib/relay";
 import type { AuthSession, Message } from "../types/api";
 import { MessageInput } from "./MessageInput";
@@ -17,24 +27,32 @@ interface ChatLayoutProps {
 
 export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
   const [relay] = useState(() => new RelayClient(session.pairedToken));
-  const [messages, setMessages] = useState<Message[]>(() => loadLocalMessages(session));
+  const [deletedMessageIds] = useState(() => loadDeletedMessageIds(session));
+  const [messages, setMessages] = useState<Message[]>(() => (
+    filterDeletedMessages(loadLocalMessages(session), deletedMessageIds)
+  ));
   const messagesRef = useRef(messages);
   const syncingRef = useRef(false);
   const [relayConnected, setRelayConnected] = useState(false);
+  const [available, setAvailable] = useState(false);
   const [online, setOnline] = useState(false);
   const [storageEnabled, setStorageEnabled] = useState(false);
   const [lastSeen, setLastSeen] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [remoteTyping, setRemoteTyping] = useState(false);
+  const [recentlyDeleted, setRecentlyDeleted] = useState<Message | null>(null);
+  const [exportingChat, setExportingChat] = useState(false);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
   const typingStateRef = useRef(false);
 
   const commitMessages = useCallback((next: Message[]) => {
-    const sorted = [...next].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+    const sorted = filterDeletedMessages(next, deletedMessageIds)
+      .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
     messagesRef.current = sorted;
     saveLocalMessages(session, sorted);
     setMessages(sorted);
-  }, [session]);
+  }, [deletedMessageIds, session]);
 
   const sync = useCallback(async () => {
     if (syncingRef.current || !relay.isDeviceOnline()) {
@@ -76,7 +94,6 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
         });
       }
       setError(null);
-      setLastSeen(new Date().toISOString());
     } catch (caught) {
       if (messagesRef.current.length === 0) {
         setError(caught instanceof Error ? caught.message : "The phone is offline.");
@@ -90,9 +107,10 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
   useEffect(() => {
     const unsubscribe = relay.subscribe((status) => {
       setRelayConnected(status.relayConnected);
-      setOnline(status.deviceOnline);
+      setAvailable(status.deviceOnline);
+      setOnline(status.chatOnline);
       setStorageEnabled(status.storageSharingEnabled);
-      if (status.deviceOnline) setLastSeen(new Date().toISOString());
+      if (status.chatOnline) setLastSeen(new Date().toISOString());
     });
     relay.connect();
     return () => {
@@ -102,7 +120,13 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
   }, [relay]);
 
   useEffect(() => {
-    if (online) void sync();
+    const status = online ? "online" : available ? "available" : relayConnected ? "offline" : "connecting";
+    setFaviconStatus(status);
+    setDocumentTitle(status);
+  }, [available, online, relayConnected]);
+
+  useEffect(() => {
+    if (available) void sync();
     const unsubscribeChanges = relay.subscribeChanges(() => void sync());
     const timer = window.setInterval(() => void sync(), 60_000);
     const onVisible = () => {
@@ -116,14 +140,15 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("online", onVisible);
     };
-  }, [online, relay, sync]);
+  }, [available, relay, sync]);
 
   const statusText = useMemo(() => {
     if (online) return storageEnabled ? "Online · Files available" : "Online · Files paused";
-    if (!relayConnected) return "Reconnecting · Messages will wait";
+    if (available) return storageEnabled ? "Available · Files available" : "Available · Files paused";
+    if (!relayConnected) return "Relay reconnecting · Messages will wait";
     if (!lastSeen) return "Phone offline · Messages will wait";
-    return `Last connected ${new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(lastSeen))}`;
-  }, [lastSeen, online, relayConnected, storageEnabled]);
+    return `Chat last open ${new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(lastSeen))}`;
+  }, [available, lastSeen, online, relayConnected, storageEnabled]);
 
   async function handleSend(text: string) {
     const now = new Date().toISOString();
@@ -148,6 +173,53 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
     }
   }, [relay]);
 
+  const handleDeleteMessage = useCallback((messageId: string) => {
+    const message = messagesRef.current.find((candidate) => candidate.id === messageId);
+    if (!message) return;
+    deletedMessageIds.add(messageId);
+    saveDeletedMessageIds(session, deletedMessageIds);
+    commitMessages(messagesRef.current.filter((candidate) => candidate.id !== messageId));
+    setRecentlyDeleted(message);
+  }, [commitMessages, deletedMessageIds, session]);
+
+  const undoDeleteMessage = useCallback(() => {
+    if (!recentlyDeleted) return;
+    deletedMessageIds.delete(recentlyDeleted.id);
+    saveDeletedMessageIds(session, deletedMessageIds);
+    commitMessages([...messagesRef.current, recentlyDeleted]);
+    setRecentlyDeleted(null);
+  }, [commitMessages, deletedMessageIds, recentlyDeleted, session]);
+
+  useEffect(() => {
+    if (!recentlyDeleted) return;
+    const timer = window.setTimeout(() => setRecentlyDeleted(null), 12_000);
+    return () => window.clearTimeout(timer);
+  }, [recentlyDeleted]);
+
+  const handleExportChat = useCallback(async () => {
+    if (exportingChat || messagesRef.current.length === 0) return;
+    setExportingChat(true);
+    setExportNotice(null);
+    try {
+      const chatExport = await buildChatExport(messagesRef.current, {
+        friendName: session.friendName,
+        viewerDeviceId: session.viewerDeviceId
+      });
+      saveBlob(chatExport.blob, chatExport.fileName);
+      setExportNotice("Chat export saved. Attachment files are listed but not included.");
+    } catch {
+      setExportNotice("The chat export could not be created. Try again.");
+    } finally {
+      setExportingChat(false);
+    }
+  }, [exportingChat, session.friendName, session.viewerDeviceId]);
+
+  useEffect(() => {
+    if (!exportNotice) return;
+    const timer = window.setTimeout(() => setExportNotice(null), 8_000);
+    return () => window.clearTimeout(timer);
+  }, [exportNotice]);
+
   function signOut() {
     relay.close();
     clearSession();
@@ -157,6 +229,8 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
 
   const storageOpen = route === "/storage";
   const compactStorage = storageOpen && window.matchMedia("(max-width: 760px)").matches;
+  const connectionState = online ? "online" : available ? "available" : relayConnected ? "offline" : "connecting";
+  const connectionLabel = online ? "Chat screen open" : available ? "Phone available" : relayConnected ? "Phone offline" : "Relay reconnecting";
   if (compactStorage) {
     return (
       <main id="main" className="mobile-storage-page">
@@ -176,12 +250,20 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
         <div className="brand-lockup">
           <span className="brand-mark" aria-hidden><MessageCircle size={22} /></span>
           <span>Between</span>
+          <span
+            className={`brand-status-dot ${connectionState}`}
+            role="img"
+            aria-label={connectionLabel}
+            title={connectionLabel}
+          />
         </div>
         <div className="connection-card">
           <div className="friend-avatar" aria-hidden>{session.friendName.slice(0, 1).toUpperCase()}</div>
           <div className="friend-copy">
             <strong>{session.friendName}</strong>
-            <span className={online ? "presence online" : "presence"}>{online ? "Online" : "Offline"}</span>
+            <span className={`presence ${online ? "online" : available ? "available" : ""}`}>
+              {online ? "Online" : available ? "Available" : "Offline"}
+            </span>
           </div>
         </div>
         <div className="privacy-note">
@@ -200,10 +282,22 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
             <div>
               <p className="eyebrow">Private conversation</p>
               <h1>{session.friendName}</h1>
-              <p className="chat-status"><span className={online ? "status-dot online" : "status-dot"} />{statusText}</p>
+              <p className="chat-status"><span className={`status-dot ${online ? "online" : available ? "available" : ""}`} />{statusText}</p>
             </div>
           </div>
           <div className="header-actions">
+            <button
+              type="button"
+              className="folder-button export-chat-button"
+              onClick={() => void handleExportChat()}
+              disabled={messages.length === 0 || exportingChat}
+              aria-label="Export chat as a ZIP file"
+              aria-busy={exportingChat}
+              title={messages.length === 0 ? "No messages to export" : "Export messages and metadata"}
+            >
+              {exportingChat ? <LoaderCircle className="export-spinner" aria-hidden size={18} /> : <Download aria-hidden size={18} />}
+              <span>Export chat</span>
+            </button>
             <button type="button" className="icon-button" onClick={() => void sync()} aria-label="Sync chat">
               <RefreshCw aria-hidden size={18} />
             </button>
@@ -222,12 +316,25 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
               viewerDeviceId={session.viewerDeviceId}
               relay={relay}
               remoteTyping={remoteTyping}
+              onDeleteMessage={handleDeleteMessage}
             />
           ) : null}
         </div>
 
         <div className="composer-shell">
-          {!online ? <p className="queue-hint">Offline — send now and it will leave when the phone reconnects.</p> : null}
+          {exportNotice ? (
+            <div className="message-delete-notice export-notice" role="status" aria-live="polite">
+              <Download aria-hidden size={16} />
+              <span>{exportNotice}</span>
+            </div>
+          ) : null}
+          {recentlyDeleted ? (
+            <div className="message-delete-notice" role="status" aria-live="polite">
+              <span>Deleted from this browser. The phone copy is unchanged.</span>
+              <button type="button" onClick={undoDeleteMessage}>Undo</button>
+            </div>
+          ) : null}
+          {!available ? <p className="queue-hint">Offline — send now and it will leave when the phone reconnects.</p> : null}
           <MessageInput onOpenStorage={() => navigate("/storage")} onSend={handleSend} onTyping={handleTyping} />
         </div>
       </main>
@@ -241,4 +348,16 @@ export function ChatLayout({ route, session, onSignedOut }: ChatLayoutProps) {
       ) : null}
     </div>
   );
+}
+
+function saveBlob(blob: Blob, name: string) {
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = name;
+  anchor.rel = "noopener";
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000);
 }
