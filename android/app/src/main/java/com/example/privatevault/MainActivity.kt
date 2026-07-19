@@ -14,7 +14,6 @@ import androidx.activity.compose.setContent
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.Lifecycle
 import androidx.metrics.performance.JankStats
 import androidx.compose.runtime.getValue
 import com.example.privatevault.app.PrivateVaultApp
@@ -33,18 +32,14 @@ import com.example.privatevault.network.AppUpdate
 import com.example.privatevault.network.GithubUpdateChecker
 import com.example.privatevault.network.availableUpdate
 import com.example.privatevault.model.ChatAttachment
-import com.example.privatevault.server.LocalServerManager
 import com.example.privatevault.service.StorageSessionNotifier
 import com.example.privatevault.security.AppLockManager
 import com.example.privatevault.ui.lock.AppLockGate
 import com.example.privatevault.ui.screen.pairing.PairingViewModel
 import com.example.privatevault.ui.theme.PrivateVaultTheme
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -57,14 +52,11 @@ class MainActivity : ComponentActivity() {
     private lateinit var attachmentManager: AttachmentManager
     private lateinit var chatRepository: ChatRepository
     private lateinit var storageRepository: StorageRepository
-    private lateinit var localServerManager: LocalServerManager
     private lateinit var notifier: StorageSessionNotifier
     private lateinit var appLockManager: AppLockManager
     private val availableUpdate = MutableStateFlow<AppUpdate?>(null)
     private var dismissedUpdateVersion: String? = null
     private var jankStats: JankStats? = null
-    private var visibleRelayJob: Job? = null
-    private var visiblePeerRelayJob: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -85,7 +77,6 @@ class MainActivity : ComponentActivity() {
         notifier = StorageSessionNotifier(applicationContext)
         chatRepository = runtime.chatRepository
         storageRepository = runtime.storageRepository
-        localServerManager = runtime.localServerManager
         backendClient = runtime.backendClient
         appConfigRepository = runtime.appConfigRepository
         peerRelayClient = runtime.peerRelayClient
@@ -162,11 +153,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         (application as PrivateVaultApplication).runtime.chatVisibilityTracker.setActivityForeground(false)
-        stopVisibleConnectionLoops()
-        notifier.markInactive()
-        lifecycleScope.launch(Dispatchers.IO) {
-            localServerManager.stop()
-        }
         appLockManager.onAppBackgrounded()
         super.onStop()
     }
@@ -180,27 +166,15 @@ class MainActivity : ComponentActivity() {
     private fun applySharingState(enabled: Boolean) {
         if (BuildConfig.LOCAL_ONLY) {
             notifier.markInactive()
-            stopVisibleConnectionLoops()
             return
         }
         lifecycleScope.launch {
-            notifier.markInactive()
             val storageAvailable = withContext(Dispatchers.IO) {
                 enabled &&
                     appConfigRepository.current.features.fileSharing &&
                     hasStorageAccess(this@MainActivity)
             }
-            withContext(Dispatchers.IO) {
-                if (storageAvailable) {
-                    localServerManager.start(tokenStore.getAccessToken())
-                } else {
-                    localServerManager.stop()
-                }
-                backendClient.updateStorageSharing(storageAvailable)
-            }
-            if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
-                startVisibleConnectionLoops()
-            }
+            notifier.markAvailable(storageAvailable)
         }
     }
 
@@ -216,43 +190,6 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             peerRelayClient.restartConnection()
         }
-    }
-
-    private fun startVisibleConnectionLoops() {
-        if (BuildConfig.LOCAL_ONLY) return
-        if (visibleRelayJob?.isActive != true) {
-            visibleRelayJob = lifecycleScope.launch(Dispatchers.IO) {
-                delay(VISIBLE_CONNECTION_START_DELAY_MS)
-                while (isActive) {
-                    val storageAvailable = settingsStore.storageSharingEnabled.first() &&
-                        settingsStore.storagePermissionGranted.first() &&
-                        appConfigRepository.current.features.fileSharing
-                    backendClient.connectRelay(storageSharingEnabled = storageAvailable)
-                    delay(appConfigRepository.current.timing.connectionRetryMillis)
-                }
-            }
-        }
-        if (visiblePeerRelayJob?.isActive != true) {
-            visiblePeerRelayJob = lifecycleScope.launch(Dispatchers.IO) {
-                delay(VISIBLE_CONNECTION_START_DELAY_MS)
-                while (isActive) {
-                    val connection = tokenStore.getPeerConnection()
-                    if (connection == null) {
-                        delay(appConfigRepository.current.timing.connectionRetryMillis)
-                        continue
-                    }
-                    peerRelayClient.connectPeer(connection)
-                    delay(appConfigRepository.current.timing.connectionRetryMillis)
-                }
-            }
-        }
-    }
-
-    private fun stopVisibleConnectionLoops() {
-        visibleRelayJob?.cancel()
-        visibleRelayJob = null
-        visiblePeerRelayJob?.cancel()
-        visiblePeerRelayJob = null
     }
 
     private suspend fun attachFile(uri: Uri): Result<ChatAttachment> = withContext(Dispatchers.IO) {
@@ -277,7 +214,6 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val JANK_LOG_TAG = "ChatFrameTiming"
-        private const val VISIBLE_CONNECTION_START_DELAY_MS = 200L
 
         fun hasStorageAccess(context: Context): Boolean {
             return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {

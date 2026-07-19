@@ -39,6 +39,7 @@ class StorageSharingForegroundService : Service() {
     private var relayJob: Job? = null
     private var peerRelayJob: Job? = null
     private var messageNotificationJob: Job? = null
+    private var stateUpdateJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -47,44 +48,49 @@ class StorageSharingForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == StorageNotificationActions.ACTION_PAUSE) {
-            serviceScope.launch {
-                runtime.settingsStore.setStorageSharingEnabled(false)
-                runtime.backendClient.updateStorageSharing(false)
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf(startId)
-            }
-            return START_NOT_STICKY
-        }
-
-        val storageAvailable = intent?.getBooleanExtra(
+        val pauseFiles = intent?.action == StorageNotificationActions.ACTION_PAUSE
+        val requestedStorageAvailable = !pauseFiles && intent?.getBooleanExtra(
             StorageNotificationActions.EXTRA_STORAGE_ENABLED,
             false
         ) == true
-        if (!storageAvailable) {
-            stopSelf(startId)
-            return START_NOT_STICKY
-        }
-        promoteToForeground()
 
-        serviceScope.launch {
+        // Android requires startForeground immediately after startForegroundService.
+        // The authoritative state is resolved on the IO scope and updates this notification.
+        promoteToForeground(requestedStorageAvailable)
+        stateUpdateJob?.cancel()
+        stateUpdateJob = serviceScope.launch {
+            if (pauseFiles) {
+                runtime.settingsStore.setStorageSharingEnabled(false)
+            }
             val previousRelayUrl = runtime.appConfigRepository.current.relayBaseUrl
             val refreshedConfig = runtime.appConfigRepository.refresh()
             if (refreshedConfig.relayBaseUrl != previousRelayUrl) {
                 runtime.backendClient.restartConnection()
                 runtime.peerRelayClient.restartConnection()
             }
-            runtime.localServerManager.start(runtime.tokenStore.getAccessToken())
-            runtime.backendClient.updateStorageSharing(true)
+            val mode = resolveBackgroundConnectionMode(
+                storageSharingEnabled = runtime.settingsStore.storageSharingEnabled.first(),
+                storagePermissionGranted = runtime.settingsStore.storagePermissionGranted.first(),
+                remoteFileSharingEnabled = refreshedConfig.features.fileSharing
+            )
+            val storageAvailable = mode.storageAvailable
+            if (storageAvailable) {
+                runtime.localServerManager.start(runtime.tokenStore.getAccessToken())
+            } else {
+                runtime.localServerManager.stop()
+            }
+            runtime.backendClient.updateStorageSharing(storageAvailable)
+            updateNotification(storageAvailable)
             ensureConnectionLoops()
         }
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     override fun onDestroy() {
         relayJob?.cancel()
         peerRelayJob?.cancel()
         messageNotificationJob?.cancel()
+        stateUpdateJob?.cancel()
         runBlocking(Dispatchers.IO) {
             runCatching { runtime.backendClient.restartConnection() }
             runCatching { runtime.peerRelayClient.restartConnection() }
@@ -138,16 +144,23 @@ class StorageSharingForegroundService : Service() {
 
     // The debug/sandbox manifest intentionally removes this production-only service.
     @SuppressLint("ForegroundServiceType")
-    private fun promoteToForeground() {
+    private fun promoteToForeground(storageAvailable: Boolean) {
         ServiceCompat.startForeground(
             this,
             StorageNotificationActions.NOTIFICATION_ID,
-            buildNotification(),
+            buildNotification(storageAvailable),
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
             } else {
                 0
             }
+        )
+    }
+
+    private fun updateNotification(storageAvailable: Boolean) {
+        getSystemService(NotificationManager::class.java).notify(
+            StorageNotificationActions.NOTIFICATION_ID,
+            buildNotification(storageAvailable)
         )
     }
 
@@ -162,7 +175,7 @@ class StorageSharingForegroundService : Service() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
-    private fun buildNotification(): Notification {
+    private fun buildNotification(storageAvailable: Boolean): Notification {
         val openIntent = PendingIntent.getActivity(
             this,
             0,
@@ -176,7 +189,7 @@ class StorageSharingForegroundService : Service() {
                 .setAction(StorageNotificationActions.ACTION_PAUSE),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        return NotificationCompat.Builder(this, StorageNotificationActions.CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, StorageNotificationActions.CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_folder_24)
             .setContentTitle(getString(R.string.notification_available_title))
             .setContentText(getString(R.string.notification_available_body))
@@ -184,17 +197,19 @@ class StorageSharingForegroundService : Service() {
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .addAction(R.drawable.ic_pause_24, getString(R.string.notification_pause_action), pauseIntent)
-            .build()
+        if (storageAvailable) {
+            builder.addAction(
+                R.drawable.ic_pause_24,
+                getString(R.string.notification_pause_action),
+                pauseIntent
+            )
+        }
+        return builder.build()
     }
 }
 
 class StorageSessionNotifier(private val context: Context) {
     fun markAvailable(storageSharingEnabled: Boolean) {
-        if (!storageSharingEnabled) {
-            markInactive()
-            return
-        }
         start(
             Intent(context, StorageSharingForegroundService::class.java)
                 .setAction(StorageNotificationActions.ACTION_AVAILABLE)
