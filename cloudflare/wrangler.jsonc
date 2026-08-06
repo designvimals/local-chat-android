@@ -5,10 +5,10 @@
   "compatibility_date": "2026-07-18",
   "vars": {
     "PUBLIC_RELAY_URL": "https://between-private-relay.design-vimals.workers.dev",
-    "APP_CONFIG_REVISION": "1",
-    "APP_LATEST_VERSION": "",
+    "APP_CONFIG_REVISION": "2",
+    "APP_LATEST_VERSION": "0.4.8",
     "APP_MINIMUM_VERSION": "",
-    "APP_UPDATE_URL": "",
+    "APP_UPDATE_URL": "https://github.com/designvimals/local-chat-android/releases/download/v0.4.8/Test-App-v0.4.8.apk",
     "APP_FILE_SHARING_ENABLED": "true",
     "APP_MESSAGE_SEARCH_ENABLED": "true",
     "APP_CONNECTION_RETRY_MILLIS": "2000",
