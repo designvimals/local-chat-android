@@ -188,7 +188,7 @@ export class RelayHub extends DurableObject<RelayEnv> {
         : { count: 0, resetsAt: now + 10 * 60_000 };
       await this.ctx.storage.put(attemptKey, { ...active, count: active.count + 1 });
       return Response.json({
-        error: "No online phone is advertising that code. Create a new code and try again."
+        error: "That code is not active. Generate a new code or make sure the phone is online."
       }, { status: 401 });
     }
 
