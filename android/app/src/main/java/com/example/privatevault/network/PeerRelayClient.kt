@@ -96,7 +96,7 @@ class PeerRelayClient(
     @Volatile
     private var peerOnline = false
 
-    suspend fun claimPairingCode(code: String): Result<PeerConnection> = withContext(Dispatchers.IO) {
+    suspend fun claimPairingCode(code: String): Result<PeerConnection?> = withContext(Dispatchers.IO) {
         runCatching {
             val baseUrl = baseUrl()
             require(code.matches(Regex("\\d{6}"))) { "Enter a six-digit code." }
@@ -113,6 +113,9 @@ class PeerRelayClient(
             val body = json.parseToJsonElement(response.bodyAsText()).jsonObject
             if (!response.status.isSuccess()) {
                 error(body["error"]?.jsonPrimitive?.contentOrNull ?: "The code could not be paired.")
+            }
+            if (body["pairingMode"]?.jsonPrimitive?.contentOrNull == "web") {
+                return@runCatching null
             }
             val connection = PeerConnection(
                 accessToken = body.requireString("pairedToken"),

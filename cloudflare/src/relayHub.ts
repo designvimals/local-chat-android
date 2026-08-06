@@ -53,14 +53,35 @@ interface LoginPayload {
   deviceName?: string;
 }
 
+interface WebPairingRecord {
+  requestId: string;
+  pairingCode: string;
+  createdAt: number;
+  expiresAt: number;
+  claimedAt?: number;
+  claimedSession?: {
+    token: string;
+    pairedToken: string;
+    viewerDeviceId: string;
+    friendName: string;
+    endpointUrl: string;
+    pairingMode: "web";
+  };
+}
+
 const MAX_FRAME_CHARACTERS = 2 * 1024 * 1024;
 const MAX_PENDING_REQUESTS = 256;
+const WEB_PAIRING_TTL_MILLIS = 10 * 60_000;
 
 export class RelayHub extends DurableObject<RelayEnv> {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/relay") return this.acceptWebSocket(request);
     if (url.pathname === "/auth/login" && request.method === "POST") return this.login(request);
+    if (url.pathname === "/auth/web-pairing" && request.method === "POST") return this.createWebPairing();
+    if (url.pathname.startsWith("/auth/web-pairing/") && request.method === "GET") {
+      return this.webPairingStatus(url.pathname.slice("/auth/web-pairing/".length));
+    }
     if (url.pathname === "/health") return Response.json({ ...this.stats(), status: "ok" });
     return Response.json({ error: "Not found" }, { status: 404 });
   }
@@ -159,6 +180,9 @@ export class RelayHub extends DurableObject<RelayEnv> {
       attachment.pairingAvailable && attachment.pairingCode === parsed.pairingCode
     );
     if (candidates.length !== 1) {
+      const webClaim = await this.claimWebPairing(parsed, now);
+      if (webClaim) return webClaim;
+
       const active = current && current.resetsAt > now
         ? current
         : { count: 0, resetsAt: now + 10 * 60_000 };
@@ -176,7 +200,7 @@ export class RelayHub extends DurableObject<RelayEnv> {
       : "viewer-web";
     const viewerName = parsed.clientType === "android"
       ? parsed.deviceName ?? "Android phone"
-      : "Web browser";
+      : "Paired device";
     this.send(socket, {
       type: "pairing.claimed",
       viewerDeviceId,
@@ -190,6 +214,115 @@ export class RelayHub extends DurableObject<RelayEnv> {
       viewerDeviceId,
       friendName: device.deviceName,
       endpointUrl: "connection"
+    });
+  }
+
+  private async createWebPairing(): Promise<Response> {
+    const now = Date.now();
+    await this.pruneExpiredWebPairings(now);
+    const requestId = `${crypto.randomUUID()}${crypto.randomUUID()}`;
+    const expiresAt = now + WEB_PAIRING_TTL_MILLIS;
+    let pairingCode = "";
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const candidate = createPairingCode();
+      const activeDeviceCode = this.sockets("device").some(({ attachment }) =>
+        attachment.pairingAvailable && attachment.pairingCode === candidate
+      );
+      const existing = await this.ctx.storage.get<string>(webPairingCodeKey(candidate));
+      if (!activeDeviceCode && !existing) {
+        pairingCode = candidate;
+        break;
+      }
+    }
+    if (!pairingCode) {
+      return Response.json({ error: "Could not create a pairing code. Try again." }, { status: 503 });
+    }
+
+    const record: WebPairingRecord = {
+      requestId,
+      pairingCode,
+      createdAt: now,
+      expiresAt
+    };
+    await this.ctx.storage.put(webPairingRequestKey(requestId), record);
+    await this.ctx.storage.put(webPairingCodeKey(pairingCode), requestId);
+    return Response.json({
+      requestId,
+      pairingCode,
+      expiresAt: new Date(expiresAt).toISOString()
+    }, {
+      headers: { "Cache-Control": "no-store" }
+    });
+  }
+
+  private async webPairingStatus(requestId: string): Promise<Response> {
+    if (!/^[0-9a-f-]{72}$/.test(requestId)) {
+      return Response.json({ error: "Pairing request not found." }, { status: 404 });
+    }
+    const now = Date.now();
+    const record = await this.ctx.storage.get<WebPairingRecord>(webPairingRequestKey(requestId));
+    if (!record) {
+      return Response.json({ error: "Pairing request not found." }, { status: 404 });
+    }
+    if (record.expiresAt <= now && !record.claimedSession) {
+      await this.deleteWebPairing(record);
+      return Response.json({ status: "expired" }, { headers: { "Cache-Control": "no-store" } });
+    }
+    if (record.claimedSession) {
+      return Response.json({ status: "claimed", session: record.claimedSession }, {
+        headers: { "Cache-Control": "no-store" }
+      });
+    }
+    return Response.json({
+      status: "pending",
+      expiresAt: new Date(record.expiresAt).toISOString()
+    }, {
+      headers: { "Cache-Control": "no-store" }
+    });
+  }
+
+  private async claimWebPairing(parsed: LoginPayload, now: number): Promise<Response | null> {
+    const requestId = await this.ctx.storage.get<string>(webPairingCodeKey(parsed.pairingCode));
+    if (!requestId) return null;
+    const record = await this.ctx.storage.get<WebPairingRecord>(webPairingRequestKey(requestId));
+    if (!record) {
+      await this.ctx.storage.delete(webPairingCodeKey(parsed.pairingCode));
+      return null;
+    }
+    if (record.expiresAt <= now) {
+      await this.deleteWebPairing(record);
+      return Response.json({ error: "That code expired. Generate a new one." }, { status: 401 });
+    }
+    if (parsed.clientType !== "android") {
+      return Response.json({ error: "Enter this code on the phone." }, { status: 401 });
+    }
+    const device = this.sockets("device").find(({ socket, attachment }) =>
+      socket.readyState === WebSocket.OPEN && attachment.deviceId === parsed.viewerDeviceId
+    );
+    if (!device) {
+      return Response.json({ error: "Keep the phone online, then enter the code again." }, { status: 409 });
+    }
+
+    record.claimedAt = now;
+    record.claimedSession = {
+      token: device.attachment.accessToken,
+      pairedToken: device.attachment.accessToken,
+      viewerDeviceId: "viewer-web",
+      friendName: device.attachment.deviceName,
+      endpointUrl: "connection",
+      pairingMode: "web"
+    };
+    await this.ctx.storage.put(webPairingRequestKey(record.requestId), record);
+    await this.ctx.storage.delete(webPairingCodeKey(record.pairingCode));
+    return Response.json({
+      pairingMode: "web",
+      token: "",
+      pairedToken: "",
+      viewerDeviceId: parsed.viewerDeviceId ?? device.attachment.deviceId,
+      friendName: "Paired device",
+      endpointUrl: "connection"
+    }, {
+      headers: { "Cache-Control": "no-store" }
     });
   }
 
@@ -372,6 +505,36 @@ export class RelayHub extends DurableObject<RelayEnv> {
       viewers: this.sockets("viewer").length
     };
   }
+
+  private async pruneExpiredWebPairings(now: number): Promise<void> {
+    const records = await this.ctx.storage.list<WebPairingRecord>({ prefix: "web-pairing:request:" });
+    const deletions: string[] = [];
+    for (const [key, record] of records) {
+      if (record.expiresAt <= now) {
+        deletions.push(key, webPairingCodeKey(record.pairingCode));
+      }
+    }
+    if (deletions.length > 0) await this.ctx.storage.delete(deletions);
+  }
+
+  private async deleteWebPairing(record: WebPairingRecord): Promise<void> {
+    await this.ctx.storage.delete([
+      webPairingRequestKey(record.requestId),
+      webPairingCodeKey(record.pairingCode)
+    ]);
+  }
+}
+
+function createPairingCode(): string {
+  return String(100000 + crypto.getRandomValues(new Uint32Array(1))[0] % 900000);
+}
+
+function webPairingRequestKey(requestId: string): string {
+  return `web-pairing:request:${requestId}`;
+}
+
+function webPairingCodeKey(pairingCode: string): string {
+  return `web-pairing:code:${pairingCode}`;
 }
 
 function parseLogin(value: unknown): LoginPayload | null {

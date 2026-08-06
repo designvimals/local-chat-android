@@ -76,7 +76,19 @@ export interface LoginResponse {
   viewerDeviceId: string;
   friendName: string;
   endpointUrl: string;
+  pairingMode?: "phone" | "web";
 }
+
+export interface WebPairingCodeResponse {
+  requestId: string;
+  pairingCode: string;
+  expiresAt: string;
+}
+
+export type WebPairingStatusResponse =
+  | { status: "pending"; expiresAt: string }
+  | { status: "claimed"; session: LoginResponse }
+  | { status: "expired" };
 
 export interface HealthResponse {
   status: "ok";

@@ -47,8 +47,10 @@ class PairingViewModel(
             _peerError.value = null
             peerRelayClient.claimPairingCode(code.trim())
                 .onSuccess { connection ->
-                    _peerName.value = connection.friendName
-                    onPeerChanged()
+                    if (connection != null) {
+                        _peerName.value = connection.friendName
+                        onPeerChanged()
+                    }
                 }
                 .onFailure { error -> _peerError.value = error.message ?: "The phone could not be paired." }
             _claimingPeer.value = false

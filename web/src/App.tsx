@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
-import { KeyRound } from "lucide-react";
-import { login } from "./lib/api";
+import { KeyRound, RefreshCw, Smartphone } from "lucide-react";
+import { createWebPairingCode, login, webPairingStatus } from "./lib/api";
 import { loadSession, saveSession } from "./lib/auth";
 import { currentRoute, navigate, type AppRoute } from "./lib/navigation";
 import { setDocumentTitle, setFaviconStatus } from "./lib/favicon";
@@ -53,7 +53,44 @@ interface LoginScreenProps {
 function LoginScreen({ onSignedIn }: LoginScreenProps) {
   const [pairingCode, setPairingCode] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [webPairing, setWebPairing] = useState<{
+    requestId: string;
+    pairingCode: string;
+    expiresAt: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!webPairing) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const status = await webPairingStatus(webPairing.requestId);
+        if (cancelled) return;
+        if (status.status === "claimed") {
+          const session = saveSession(status.session);
+          onSignedIn(session);
+          navigate("/chat");
+          return;
+        }
+        if (status.status === "expired") {
+          setWebPairing(null);
+          setError("That code expired. Generate a new one.");
+        }
+      } catch (caught) {
+        if (!cancelled) {
+          setError(caught instanceof Error ? caught.message : "Could not check the code.");
+        }
+      }
+    };
+    void poll();
+    const timer = window.setInterval(poll, 2_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [webPairing, onSignedIn]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -71,6 +108,20 @@ function LoginScreen({ onSignedIn }: LoginScreenProps) {
     }
   }
 
+  async function generateCode() {
+    setGenerating(true);
+    setError(null);
+    try {
+      const response = await createWebPairingCode();
+      setWebPairing(response);
+      setPairingCode("");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not generate a code.");
+    } finally {
+      setGenerating(false);
+    }
+  }
+
   return (
     <main id="main" className="login-page">
       <section className="login-panel" aria-labelledby="login-title">
@@ -79,7 +130,28 @@ function LoginScreen({ onSignedIn }: LoginScreenProps) {
         </div>
         <p className="eyebrow">One private connection</p>
         <h1 id="login-title">Between us.</h1>
-        <p className="login-copy">Enter the one-time code shown on the phone. After pairing, this browser remembers the connection locally.</p>
+        <p className="login-copy">Enter the one-time code shown on the phone. After pairing, this device remembers the connection locally.</p>
+
+        <div className="web-pairing-card">
+          <div className="web-pairing-heading">
+            <Smartphone size={18} aria-hidden />
+            <span>Pairing</span>
+          </div>
+          {webPairing ? (
+            <>
+              <div className="web-pairing-code" aria-label={`Pairing code ${webPairing.pairingCode}`}>
+                {formatPairingCode(webPairing.pairingCode)}
+              </div>
+              <p>Enter this code on the phone. The chat will open when pairing is complete.</p>
+            </>
+          ) : (
+            <p>Generate a code here, then enter it on the phone.</p>
+          )}
+          <button type="button" className="soft-button web-pairing-button" onClick={generateCode} disabled={generating}>
+            <RefreshCw size={16} aria-hidden />
+            {generating ? "Generating..." : webPairing ? "New code" : "Generate code"}
+          </button>
+        </div>
 
         <form className="login-form" onSubmit={submit}>
           <input type="text" name="username" autoComplete="username" value="viewer" readOnly hidden />
@@ -104,4 +176,8 @@ function LoginScreen({ onSignedIn }: LoginScreenProps) {
       </section>
     </main>
   );
+}
+
+function formatPairingCode(value: string): string {
+  return value.replace(/(\d{3})(\d{3})/, "$1  $2");
 }

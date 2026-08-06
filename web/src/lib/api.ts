@@ -1,4 +1,4 @@
-import type { LoginResponse } from "../types/api";
+import type { LoginResponse, WebPairingCodeResponse, WebPairingStatusResponse } from "../types/api";
 
 export const backendBaseUrl = import.meta.env.VITE_BACKEND_URL ??
   (import.meta.env.PROD ? window.location.origin : "http://localhost:8787");
@@ -19,5 +19,17 @@ export function login(pairingCode: string): Promise<LoginResponse> {
   return requestJson<LoginResponse>("/auth/login", {
     method: "POST",
     body: JSON.stringify({ pairingCode })
+  });
+}
+
+export function createWebPairingCode(): Promise<WebPairingCodeResponse> {
+  return requestJson<WebPairingCodeResponse>("/auth/web-pairing", {
+    method: "POST"
+  });
+}
+
+export function webPairingStatus(requestId: string): Promise<WebPairingStatusResponse> {
+  return requestJson<WebPairingStatusResponse>(`/auth/web-pairing/${encodeURIComponent(requestId)}`, {
+    method: "GET"
   });
 }

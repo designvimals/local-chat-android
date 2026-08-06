@@ -4,6 +4,8 @@ import type {
   FriendStatusResponse,
   HealthResponse,
   LoginResponse,
+  WebPairingCodeResponse,
+  WebPairingStatusResponse,
   Message,
   StorageListResponse
 } from "../../../shared/api-contracts/types";
@@ -14,6 +16,8 @@ export type {
   FriendStatusResponse,
   HealthResponse,
   LoginResponse,
+  WebPairingCodeResponse,
+  WebPairingStatusResponse,
   Message,
   StorageListResponse
 };

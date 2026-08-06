@@ -54,6 +54,20 @@ export default {
       return withCors(await hub.fetch(forwarded), request);
     }
 
+    if (url.pathname === "/auth/web-pairing" && request.method === "POST") {
+      const hub = env.RELAY_HUB.getByName("global");
+      return withCors(await hub.fetch(new Request("https://between.internal/auth/web-pairing", {
+        method: "POST"
+      })), request);
+    }
+
+    if (url.pathname.startsWith("/auth/web-pairing/") && request.method === "GET") {
+      const hub = env.RELAY_HUB.getByName("global");
+      return withCors(await hub.fetch(new Request(`https://between.internal${url.pathname}`, {
+        method: "GET"
+      })), request);
+    }
+
     if (url.pathname.startsWith("/auth/") || url.pathname.startsWith("/api/")) {
       return withCors(Response.json({ error: "Not found" }, { status: 404 }), request);
     }
