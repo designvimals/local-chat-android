@@ -165,24 +165,24 @@ export class RelayHub extends DurableObject<RelayEnv> {
     const clientId = request.headers.get("x-client-ip") || "unknown";
     const attemptKey = `login:${clientId}`;
     const now = Date.now();
-    const current = await this.ctx.storage.get<LoginAttempt>(attemptKey);
-    if (current && current.resetsAt > now && current.count >= 6) {
-      return Response.json({ error: "Too many attempts. Try again in 10 minutes." }, { status: 429 });
-    }
-
     const body = await request.json().catch(() => null);
     const parsed = parseLogin(body);
     if (!parsed) {
       return Response.json({ error: "Enter the six-digit code shown on the phone." }, { status: 400 });
     }
 
+    const webClaim = await this.claimWebPairing(parsed, now);
+    if (webClaim) return webClaim;
+
+    const current = await this.ctx.storage.get<LoginAttempt>(attemptKey);
+    if (current && current.resetsAt > now && current.count >= 6) {
+      return Response.json({ error: "Too many attempts. Try again in 10 minutes." }, { status: 429 });
+    }
+
     const candidates = this.sockets("device").filter(({ attachment }) =>
       attachment.pairingAvailable && attachment.pairingCode === parsed.pairingCode
     );
     if (candidates.length !== 1) {
-      const webClaim = await this.claimWebPairing(parsed, now);
-      if (webClaim) return webClaim;
-
       const active = current && current.resetsAt > now
         ? current
         : { count: 0, resetsAt: now + 10 * 60_000 };
